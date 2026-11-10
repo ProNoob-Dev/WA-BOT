@@ -38,6 +38,17 @@ const BYPASS_MAX_LINKS = Math.max(1, config.MOVIE_BYPASS_MAX_LINKS || 5);
 const BYPASS_PROGRESS_PRIORITY = 2;
 const BYPASS_BUDGET_MS = config.MOVIE_HD_BYPASS_BUDGET_MS || 8_000;
 const AUTO_DELETE_MS = 5 * 60 * 60 * 1000; // 5 hours
+/** A stuck send/edit/shorten must never freeze a bypass run (see _runBypass). */
+const SEND_TIMEOUT_MS = 8_000;
+const SHORTEN_TIMEOUT_MS = 8_000;
+
+/** Race a promise against a timeout (same local pattern as stickerDownload). */
+function withTimeout(promise, ms) {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms)),
+    ]);
+}
 
 /** Hosts whose links are auto-bypassable (mirror of HdHubBypassService families). */
 const BYPASS_HOST_RE = /https?:\/\/[^\s"'<>]*(hubcloud|hubdrive|hubcdn|hubstream|hdhubdrive|driveseed|hdstream4u|nexdrive|gdflix)\.[a-z.]+[^\s"'<>]*/gi;
@@ -325,26 +336,55 @@ class BypassController {
         const run = (async () => {
             let progressMsg = null;
             try {
-                progressMsg = await sock.sendMessage(chatId, {
+                progressMsg = await withTimeout(sock.sendMessage(chatId, {
                     text: formatBypassProgress(urls, 15, '🔎 Fetching pages…'),
-                }, { quoted: originalMsg });
+                }, { quoted: originalMsg }), SEND_TIMEOUT_MS);
             } catch {}
 
-            const editProgress = async (percent, note) => {
-                if (!progressMsg?.key) return;
-                try {
-                    await messageQueue.enqueue(chatId, async () => {
-                        await sock.sendMessage(resolveOutboundJid(progressMsg.key, chatId), {
-                            text: formatBypassProgress(urls, percent, note),
+            // Progress edits are cosmetic: fire-and-forget through the
+            // per-chat queue, never awaited — a stuck queue must not stall
+            // the bypass. `finished` stops a late edit overwriting the
+            // final result.
+            let finished = false;
+            const editProgress = (percent, note) => {
+                if (!progressMsg?.key || finished) return;
+                void messageQueue.enqueue(chatId, async () => {
+                    if (finished || !progressMsg?.key) return;
+                    await sock.sendMessage(resolveOutboundJid(progressMsg.key, chatId), {
+                        text: formatBypassProgress(urls, percent, note),
+                        edit: normalizeOwnMessageKey(progressMsg.key, chatId),
+                        linkPreview: false,
+                    });
+                }, BYPASS_PROGRESS_PRIORITY).catch(() => {});
+            };
+
+            // Terminal message: edit the progress message, or send a fresh
+            // one if the edit stalls/fails (a hung edit must not swallow
+            // the result). Sets `finished` first so no progress edit lands
+            // after it.
+            const editOrSend = async (text) => {
+                finished = true;
+                if (progressMsg?.key) {
+                    try {
+                        await withTimeout(sock.sendMessage(resolveOutboundJid(progressMsg.key, chatId), {
+                            text,
                             edit: normalizeOwnMessageKey(progressMsg.key, chatId),
                             linkPreview: false,
-                        });
-                    }, BYPASS_PROGRESS_PRIORITY);
-                } catch {}
+                        }), SEND_TIMEOUT_MS);
+                        this.scheduleDelete(sock, chatId, progressMsg.key);
+                        return;
+                    } catch {}
+                }
+                try {
+                    const sent = await withTimeout(sock.sendMessage(chatId, { text, linkPreview: false }, { quoted: originalMsg }), SEND_TIMEOUT_MS);
+                    this.scheduleDelete(sock, chatId, sent?.key);
+                } catch (err) {
+                    logger.warn(`Bypass result send failed: ${err?.message || err}`);
+                }
             };
 
             try {
-                await editProgress(35, '🔓 Unlocking download servers…');
+                editProgress(35, '🔓 Unlocking download servers…');
 
                 // 2) resolve all links through the shared parallel pool
                 const resolved = await this._resolveWithSlot(urls, BYPASS_BUDGET_MS);
@@ -352,40 +392,33 @@ class BypassController {
                 const gdflixTried = urls.filter((u) => /gdflix\./i.test(u));
 
                 if (!ok.length) {
-                    if (progressMsg?.key) {
-                        try {
-                            await sock.sendMessage(resolveOutboundJid(progressMsg.key, chatId), {
-                                text: gdflixTried.length && ok.length === 0
-                                    ? formatGdflixLimited(gdflixTried)
-                                    : formatBypassFailed(urls, Math.max(0, BYPASS_DAILY_LIMIT - used), unlimited),
-                                edit: normalizeOwnMessageKey(progressMsg.key, chatId),
-                                linkPreview: false,
-                            });
-                            this.scheduleDelete(sock, chatId, progressMsg.key);
-                        } catch {}
-                    }
+                    await editOrSend(gdflixTried.length && ok.length === 0
+                        ? formatGdflixLimited(gdflixTried)
+                        : formatBypassFailed(urls, Math.max(0, BYPASS_DAILY_LIMIT - used), unlimited));
                     logger.info(`Bypass failed for ${urls.length} link(s)`);
                     return;
                 }
 
-                await editProgress(70, '🔗 Creating short links…');
+                editProgress(70, '🔗 Creating short links…');
 
-                // 3) short links for every direct link (parallel)
+                // 3) short links for every direct link (parallel). Each
+                // mint is bounded — a slow Mongo must not freeze the run;
+                // a timed-out link keeps its direct URL.
                 const allLinks = [];
                 for (const r of ok) allLinks.push(...r.links);
                 await Promise.all(allLinks.map(async (l) => {
                     try {
-                        const minted = await shortLinkService.shorten(l.url);
+                        const minted = await withTimeout(shortLinkService.shorten(l.url), SHORTEN_TIMEOUT_MS);
                         const expiring = typeof minted === 'string' ? minted : minted?.url;
                         if (!expiring) return;
-                        const display = await urlShortener._toDisplayShortUrl(expiring);
+                        const display = await withTimeout(urlShortener._toDisplayShortUrl(expiring), SHORTEN_TIMEOUT_MS);
                         l.url = display || expiring;
                     } catch (e) {
                         logger.warn(`Bypass short link failed for one server: ${e?.message || e}`);
                     }
                 }));
 
-                await editProgress(100, '✅ Done');
+                editProgress(100, '✅ Done');
 
                 // 4) consume one credit per successful link
                 const successCount = ok.length;
@@ -395,36 +428,14 @@ class BypassController {
                 }
 
                 // 5) replace progress with results
-                const resultText = formatBypassResult({
+                await editOrSend(formatBypassResult({
                     results: ok,
                     remaining: Math.max(0, BYPASS_DAILY_LIMIT - used),
                     unlimited,
-                });
-                if (progressMsg?.key) {
-                    try {
-                        await sock.sendMessage(resolveOutboundJid(progressMsg.key, chatId), {
-                            text: resultText,
-                            edit: normalizeOwnMessageKey(progressMsg.key, chatId),
-                            linkPreview: false,
-                        });
-                        this.scheduleDelete(sock, chatId, progressMsg.key);
-                        return;
-                    } catch {}
-                }
-                const sent = await sock.sendMessage(chatId, { text: resultText, linkPreview: false }, { quoted: originalMsg });
-                this.scheduleDelete(sock, chatId, sent?.key);
+                }));
             } catch (err) {
                 logger.error(`Bypass error: ${err?.stack || err?.message || err}`);
-                if (progressMsg?.key) {
-                    try {
-                        await sock.sendMessage(resolveOutboundJid(progressMsg.key, chatId), {
-                            text: formatBypassFailed(urls, Math.max(0, BYPASS_DAILY_LIMIT - used), unlimited),
-                            edit: normalizeOwnMessageKey(progressMsg.key, chatId),
-                            linkPreview: false,
-                        });
-                        this.scheduleDelete(sock, chatId, progressMsg.key);
-                    } catch {}
-                }
+                await editOrSend(formatBypassFailed(urls, Math.max(0, BYPASS_DAILY_LIMIT - used), unlimited));
             } finally {
                 this._activeByUser.delete(userKey);
             }
