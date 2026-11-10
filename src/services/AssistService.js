@@ -14,6 +14,7 @@ import {
 } from '../utils/permissions.js';
 import { safeSendMessage } from '../utils/waMessage.js';
 import { extractInstagramUrl } from '../utils/instagramUrl.js';
+import { extractBypassableUrl } from '../controllers/BypassController.js';
 
 class AssistService {
     /**
@@ -107,6 +108,14 @@ class AssistService {
 
         const igUrl = extractInstagramUrl(text);
         if (igUrl && text.replace(igUrl, '').trim().length < 8) {
+            return false;
+        }
+
+        // Bypassable links (hubcloud et al.) are handled by the bypass hook —
+        // don't let the assistant chat over them. Same idea as the Insta
+        // check above, but movie posts carry several links + a title, so
+        // any bypassable link in the message counts.
+        if (extractBypassableUrl(text)) {
             return false;
         }
 

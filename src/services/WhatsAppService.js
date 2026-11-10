@@ -842,7 +842,8 @@ class WhatsAppService {
                     });
             }
         }
-        // /bypasson groups: auto-bypass the first HDHub/HubCloud/GDFlix link
+        // DMs: always auto-bypass. Groups: only where /bypasson was used.
+        // A message may carry several links — all of them bypass in one go.
         if (textForUrls.length > 0 && this.commandController?.getBypassController) {
             const bc = this.commandController.getBypassController();
             if (bc?.maybeAutoBypass) {

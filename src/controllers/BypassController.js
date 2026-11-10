@@ -510,13 +510,19 @@ class BypassController {
     }
 
     /** Called by WhatsAppService for every non-command group text. */
+    /**
+     * Auto-bypass pasted links — no /bypass command needed.
+     * DMs: always auto (same as Insta). Groups: only where /bypasson was used
+     * (staff opt-in, so the bot doesn't spend strangers' credits uninvited).
+     */
     async maybeAutoBypass(sock, chatId, text, senderJid, msg) {
-        if (!chatId?.endsWith('@g.us')) return; // groups only
         if (!this.groupManager) return;
-        try {
-            if (!(await this.groupManager.isBypassAutoEnabled(chatId))) return;
-        } catch {
-            return;
+        if (chatId?.endsWith('@g.us')) {
+            try {
+                if (!(await this.groupManager.isBypassAutoEnabled(chatId))) return;
+            } catch {
+                return;
+            }
         }
         // A message may carry several links — bypass ALL of them in one go
         const urls = extractBypassableUrls(text).slice(0, BYPASS_MAX_LINKS);
