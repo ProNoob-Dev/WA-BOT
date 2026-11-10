@@ -47,10 +47,62 @@ function decodeB64(s) {
     }
 }
 
+/**
+ * hubcloud rotates its TLD (.ist → .pw → …) and the old TLDs eventually die.
+ * Instead of hand-editing links, the bot learns the live TLD at runtime:
+ *   - every successful hubcloud fetch records the FINAL host after redirects
+ *     (old TLDs 302 to the live one, so the redirect chain names it), and
+ *   - when a hubcloud fetch fails outright, the same path is probed on the
+ *     other known TLDs and the first one serving a real drive/video page wins.
+ * The learned TLD is then rewritten up-front by canonicalizeHost, so the
+ * next link goes straight to the live domain.
+ *
+ * ponytail: the probe list is seeds only. A brand-new TLD that no known TLD
+ * redirects to yet is invisible until it is added to HUBCLOUD_TLDS (one line)
+ * — or until a working link with it flows through the bot (movie API rows
+ * carry the current TLD, and any successful fetch learns it).
+ */
+const HUBCLOUD_TLDS = ['pw', 'ist', 'cx', 'foo'];
+let hubcloudLiveTld = null;
+
+/** TLD of a hubcloud.* host ('' when the URL isn't one). */
+export function hubcloudTldOf(urlStr) {
+    const m = hostOf(urlStr).match(/(?:^|\.)hubcloud\.([a-z]+)$/i);
+    return m ? m[1].toLowerCase() : '';
+}
+
+/** Remember a TLD as live (from a fetched URL — final host after redirects). */
+export function noteHubcloudTld(urlStr) {
+    const tld = hubcloudTldOf(urlStr);
+    if (tld && tld !== hubcloudLiveTld) {
+        hubcloudLiveTld = tld;
+        logger.info(`[HdHubBypass] hubcloud live TLD → .${tld}`);
+    }
+}
+
+/** Same URL on another hubcloud TLD (path/query kept; non-hubcloud untouched). */
+export function rewriteHubcloudTld(urlStr, tld) {
+    if (!hubcloudTldOf(urlStr)) return String(urlStr || '');
+    try {
+        const u = new URL(urlStr);
+        u.hostname = `hubcloud.${tld}`;
+        return u.href;
+    } catch {
+        return String(urlStr || '').replace(/\/\/hubcloud\.[a-z]+/i, `//hubcloud.${tld}`);
+    }
+}
+
 /** Bump any known-moved host to its current TLD before fetching. */
-function canonicalizeHost(urlStr) {
-    return String(urlStr || '')
+export function canonicalizeHost(urlStr) {
+    let out = String(urlStr || '')
         .replace(/\/\/hubcdn\.(wiki|club)\//i, '//hubcdn.wiki/');
+    // ponytail: the learned TLD is process-local and only changes when a
+    // fetch proves a TLD live (or dead, via the fetchPage probe) — a stale
+    // entry self-heals on the next failed fetch, it is never force-expired.
+    if (hubcloudLiveTld && hubcloudTldOf(out) && hubcloudTldOf(out) !== hubcloudLiveTld) {
+        out = rewriteHubcloudTld(out, hubcloudLiveTld);
+    }
+    return out;
 }
 
 let _relaxedAgent = null;
@@ -60,6 +112,46 @@ function relaxedHttpsAgent() {
 }
 
 const TLS_CERT_ERR = /unable to verify|self.signed|cert(ificate)? (has expired|chain)|depth_zero|err_tls/i;
+
+/** Final URL axios landed on after redirects ('' when unavailable). */
+function finalUrlOf(res, fallback) {
+    return res?.request?.res?.responseUrl || res?.request?.responseUrl || fallback || '';
+}
+
+/** A hubcloud page is "live" when it carries the download anchor (drive
+ * pages) or a hubcloud.php worker link (video pages). Parked/404 pages
+ * have neither — the acceptance test for the TLD probe. */
+export function isLiveHubcloudPage(html) {
+    return /id="download"|hubcloud\.php\?/i.test(String(html || ''));
+}
+
+/**
+ * The hubcloud TLD rotated (or the cached one went stale): retry the same
+ * path on the other known TLDs and return the first live page body.
+ * Returns null when none serves a live page — the caller then fails exactly
+ * as it would have without the probe.
+ */
+async function probeHubcloudTlds(urlStr, opts) {
+    const tried = hubcloudTldOf(urlStr);
+    for (const tld of HUBCLOUD_TLDS) {
+        if (tld === tried) continue;
+        const candidate = rewriteHubcloudTld(urlStr, tld);
+        try {
+            const res = await axios.get(candidate, {
+                ...opts,
+                timeout: Math.min(opts.timeout || 9_000, 5_000),
+            });
+            const html = typeof res.data === 'string' ? res.data : String(res.data || '');
+            if (!isLiveHubcloudPage(html)) continue;
+            noteHubcloudTld(finalUrlOf(res, candidate));
+            logger.info(`[HdHubBypass] hubcloud TLD moved .${tried || '?'} → .${hubcloudTldOf(finalUrlOf(res, candidate)) || tld}`);
+            return html;
+        } catch {
+            // dead TLD — try the next one
+        }
+    }
+    return null;
+}
 
 /** GET a page as text (axios). Several scrape targets (hubcloud.ist et al)
  * serve an incomplete TLS chain that browsers tolerate but Node rejects;
@@ -75,15 +167,34 @@ async function fetchPage(urlStr, { referer, timeoutMs } = {}) {
         // accept it; extraction simply finds nothing when the body is junk.
         validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
     };
+    const textOf = (res) => {
+        // Old TLDs 302 to the live one — the redirect chain names it, so
+        // record it: the next link rewrites straight there (canonicalizeHost).
+        // Note the body may come from the live host while the caller still
+        // holds the stale URL; that is harmless — the anchors we extract are
+        // absolute, and any re-fetch follows the same redirect chain.
+        noteHubcloudTld(finalUrlOf(res, urlStr));
+        return typeof res.data === 'string' ? res.data : String(res.data || '');
+    };
     try {
-        const { data } = await axios.get(urlStr, opts);
-        return typeof data === 'string' ? data : String(data);
+        return textOf(await axios.get(urlStr, opts));
     } catch (err) {
         const msg = String(err?.message || err?.code || '');
-        if (!TLS_CERT_ERR.test(msg)) throw err;
-        logger.warn(`[HdHubBypass] ${hostOf(urlStr)} TLS chain issue, retrying relaxed`);
-        const { data } = await axios.get(urlStr, { ...opts, httpsAgent: relaxedHttpsAgent() });
-        return typeof data === 'string' ? data : String(data);
+        if (TLS_CERT_ERR.test(msg)) {
+            logger.warn(`[HdHubBypass] ${hostOf(urlStr)} TLS chain issue, retrying relaxed`);
+            try {
+                return textOf(await axios.get(urlStr, { ...opts, httpsAgent: relaxedHttpsAgent() }));
+            } catch (e2) {
+                err = e2;
+            }
+        }
+        // Dead hubcloud host (TLD rotated)? Probe the other known TLDs for
+        // the same path; a miss fails exactly as before (rethrow).
+        if (hubcloudTldOf(urlStr)) {
+            const probed = await probeHubcloudTlds(urlStr, opts);
+            if (probed !== null) return probed;
+        }
+        throw err;
     }
 }
 
