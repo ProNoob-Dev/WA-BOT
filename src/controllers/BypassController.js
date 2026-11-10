@@ -538,7 +538,10 @@ class BypassController {
             hadChannelLink = true;
             try {
                 const hit = await resolveChannelInvite(sock, ch.code);
-                if (!hit?.jid) continue;
+                if (!hit?.jid) {
+                    logger.warn(`[Bypass] channel link ${ch.code}: invite did not resolve to a channel`);
+                    continue;
+                }
                 const found = await findChannelMessage(sock, hit.jid, ch.messageId);
                 if (!found) continue;
                 urls = urls.concat(extractBypassableUrls(getTextForUrlScan(found.message)));

@@ -143,12 +143,14 @@ export async function fetchNewsletterMessages(sock, channelJid, count = 20, afte
  * @param {number} [opts.budgetMs]
  * @returns {Promise<import('baileys').proto.IWebMessageInfo | null>}
  */
-export async function findChannelMessage(sock, channelJid, messageId, { pages = 3, perPage = 25, budgetMs = 20_000 } = {}) {
+export async function findChannelMessage(sock, channelJid, messageId, { pages = 5, perPage = 25, budgetMs = 25_000 } = {}) {
     if (!sock?.newsletterFetchMessages || !channelJid) return null;
     const target = String(messageId || '');
     const deadline = Date.now() + budgetMs;
     const seen = new Set();
     let after;
+    let minSeen = null;
+    let maxSeen = null;
     for (let page = 0; page < pages; page++) {
         const remain = deadline - Date.now();
         if (remain <= 0) break;
@@ -158,10 +160,15 @@ export async function findChannelMessage(sock, channelJid, messageId, { pages = 
                 fetchNewsletterMessages(sock, channelJid, perPage, after),
                 new Promise((resolve) => setTimeout(() => resolve(null), remain)),
             ]);
-        } catch {
+        } catch (err) {
+            logger.warn(`[Channel] find ${target || 'latest'} in ${channelJid}: page ${page + 1} failed: ${err?.message || err}`);
             break;
         }
-        if (!batch?.length) break;
+        if (batch === null) {
+            logger.warn(`[Channel] find ${target || 'latest'} in ${channelJid}: page ${page + 1} timed out`);
+            break;
+        }
+        if (!batch.length) break;
         if (!target) return batch[0];
         let grew = false;
         let minId = null;
@@ -172,12 +179,17 @@ export async function findChannelMessage(sock, channelJid, messageId, { pages = 
             grew = true;
             if (id === target) return m;
             const n = Number(id);
-            if (Number.isFinite(n) && (minId === null || n < minId)) minId = n;
+            if (Number.isFinite(n)) {
+                if (minId === null || n < minId) minId = n;
+                if (minSeen === null || n < minSeen) minSeen = n;
+                if (maxSeen === null || n > maxSeen) maxSeen = n;
+            }
         }
         if (!grew) break;
         after = minId ?? String(batch[batch.length - 1]?.key?.id || '');
         if (!after) break;
     }
+    logger.warn(`[Channel] find ${target || 'latest'} in ${channelJid}: not found after ${seen.size} messages (ids ${minSeen ?? '?'}..${maxSeen ?? '?'})`);
     return null;
 }
 
