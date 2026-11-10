@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WA-BOT — one WhatsApp bot that runs the whole group</title>
+<meta name="description" content="WA-BOT is a WhatsApp bot on Baileys 7: movies with working download links, Instagram downloads, stickers, trade alerts, and two LLM fallback routers. One instance holds the session.">
+<meta property="og:title" content="WA-BOT — one WhatsApp bot that runs the whole group">
+<meta property="og:description" content="Movies, Instagram, stickers, trade alerts — and an LLM brain with two fallback routers.">
+<meta property="og:image" content="assets/social-preview.png">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header>
+  <div class="wrap head">
+    <div class="logo">W</div>
+    <div class="name">WA-BOT</div>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#llm">LLM brain</a>
+      <a href="#arch">Architecture</a>
+      <a href="#features">Features</a>
+      <a href="#commands">Commands</a>
+      <a href="#setup">Setup</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap">
+    <span class="badge">Baileys 7 · Node.js 22 · MongoDB</span>
+    <h1>One WhatsApp bot<br><span>that runs the whole group.</span></h1>
+    <p class="lede">Movies with download links that actually work. Instagram downloads. Stickers. Trade alerts. And an LLM that answers DMs, writes the daily recap, and heals the bot itself — with two fallback routers, not one API key and a prayer.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/ProNoob-Dev/WA-BOT">View on GitHub →</a>
+      <a class="btn" href="#setup">Run it in four commands</a>
+    </div>
+    <img class="diagram hero-diagram" src="assets/chat-demo.svg" alt="WhatsApp chat: a hubcloud link is pasted and WA-BOT replies with bypassed short links, then does the same for a channel post" width="800" height="460">
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <h2>How it works</h2>
+    <p>Paste a hubcloud, hubdrive or gdflix link in a DM and it bypasses itself — no command needed. Groups work the same once a staff member runs <code>/bypasson</code>. Or <code>/bypass &lt;link&gt;</code> anywhere, up to 5 links at once.</p>
+    <img class="diagram" src="assets/bypass-flow.svg" alt="Bypass pipeline: paste a link, detect the host, resolve it, mint a short link, reply" width="900" height="220">
+    <p>Hubcloud TLDs rotate; the bot doesn't care. Every successful fetch records the live TLD after redirects, and a failed fetch probes the other known TLDs — no more hand-editing links when hubcloud moves. Every direct link gets a self-hosted <code>/d/</code> link that expires in 7 hours, so a leaked link dies on its own. And it can't get stuck: progress edits are fire-and-forget, every short-link mint is capped at 8 seconds, and a stalled result edit falls back to a fresh message.</p>
+    <img class="diagram" src="assets/channel-flow.svg" alt="Channel link to bypassed post: paste a channel link, the bot opens that post and bypasses every hubcloud link in it" width="900" height="220">
+    <p>A <code>whatsapp.com/channel/…/2289</code> link works the same way: the bot resolves the channel, pages back through its history (up to 125 posts) to find that exact post, and bypasses every hubcloud link inside it. If the post can't be found, it says so instead of staying silent.</p>
+  </div>
+</section>
+
+<section id="llm">
+  <div class="wrap">
+    <h2>The LLM brain</h2>
+    <p>Two real fallback routers. On an error or a quota hit, the request falls through to the next provider; a dead provider cools down instead of being retried — one interview-question generation once took 163 seconds retried against a dead provider, and that's what the cooldown fixed. Bursts spread across providers through a per-provider rate gate instead of stampeding the first one.</p>
+    <img class="diagram" src="assets/llm-router.svg" alt="Two LLM routers: Assist (Gemini, Groq, NVIDIA, OpenRouter) and Trade (OrcaRouter first, then the same chain)" width="900" height="280">
+    <table>
+      <tr><th>Router</th><th>Chain</th><th>What it powers</th></tr>
+      <tr><td><b>Assist</b></td><td>Gemini → Groq → NVIDIA → OpenRouter</td><td><code>/assist</code> DM persona, group recaps, auto-chat greetings, <code>/fix</code> self-heal</td></tr>
+      <tr><td><b>Trade</b></td><td>OrcaRouter (free DeepSeek V4 Flash) → Gemini → Groq → NVIDIA → OpenRouter</td><td>Trade alerts, <code>/tradenow</code>, <code>/swing</code>, <code>/expiry</code></td></tr>
+    </table>
+  </div>
+</section>
+
+<section id="arch">
+  <div class="wrap">
+    <h2>Architecture</h2>
+    <p>The flow is boring on purpose: WhatsApp → Baileys socket → command registry (routes + access rules) → one controller per area → services that do the work → MongoDB, which also stores the WhatsApp session, so a redeploy keeps the login.</p>
+    <img class="diagram" src="assets/architecture.svg" alt="Architecture: WhatsApp, Baileys socket, command registry, controllers, services, MongoDB" width="900" height="560">
+  </div>
+</section>
+
+<section id="day">
+  <div class="wrap">
+    <h2>A day with the bot</h2>
+    <img class="diagram" src="assets/schedule.svg" alt="A day with the bot: chat opens at 09:00, jobs run all day, recap in the evening, chat closes at 23:55" width="900" height="200">
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <div class="grid">
+      <div class="card"><h3>Movies</h3><p><code>/movie</code> search with live progress, short links, TMDB upcoming, genre and trending.</p></div>
+      <div class="card"><h3>Bypass</h3><p>Auto-bypass in DMs and <code>/bypasson</code> groups, channel links, hubcloud TLD auto-detect.</p></div>
+      <div class="card"><h3>Instagram</h3><p>Download posts and reels (<code>/insta</code>); auto-download in DMs and groups with <code>/instaon</code>.</p></div>
+      <div class="card"><h3>Stickers</h3><p>Create, steal and convert stickers; auto-forward from WhatsApp channels into target groups.</p></div>
+      <div class="card"><h3>Courses</h3><p>Polls free courses and posts to activated groups, no duplicates per group.</p></div>
+      <div class="card"><h3>News &amp; GitHub</h3><p>Scheduled Inshorts tech digests and trending repos, on your schedule.</p></div>
+      <div class="card"><h3>Group recap</h3><p>End-of-day AI summary of what the group actually talked about.</p></div>
+      <div class="card"><h3>Auto chat</h3><p>Locks and unlocks group chat daily — opens 9 AM with an LLM greeting, closes 11:55 PM.</p></div>
+      <div class="card"><h3>Trade</h3><p>NSE F&amp;O alerts, <code>/tradenow</code>, <code>/swing</code>, <code>/expiry</code>, and measured win rates.</p></div>
+      <div class="card"><h3>Moderation</h3><p>Warns, message delete helpers, welcome messages, group admin tools.</p></div>
+      <div class="card"><h3>Owner tools</h3><p>Premium and mods, member scrape &amp; broadcast, Drive sources, <code>/assist</code>, <code>/fix</code> self-heal, <code>/deploy</code>.</p></div>
+      <div class="card"><h3>Dashboard</h3><p>Web admin panel (<code>/admin?token=…</code>) and a live dashboard.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="commands">
+  <div class="wrap">
+    <h2>Commands</h2>
+    <p>Use <code>/help</code> on WhatsApp for the live list, filtered by your role and chat type.</p>
+    <details open>
+      <summary>Anyone</summary>
+      <p><code>/ping</code> <code>/help</code> <code>/movie</code> <code>/upcoming</code> <code>/genre</code> <code>/insta</code> <code>/sticker</code> <code>/steal</code> <code>/toimg</code> <code>/rgb</code> <code>/horo</code> <code>/advice</code> <code>/facts</code> <code>/news</code> <code>/github</code> <code>/posted</code> <code>/status</code> <code>/checklimit</code></p>
+    </details>
+    <details>
+      <summary>Bypass</summary>
+      <p><code>/bypass</code> <code>/bypasson</code> <code>/bypassoff</code></p>
+    </details>
+    <details>
+      <summary>Staff — group toggles</summary>
+      <p><code>/activate</code> <code>/deactivate</code> <code>/courson</code> <code>/coursesoff</code> <code>/newson</code> <code>/newsoff</code> <code>/githubon</code> <code>/githuboff</code> <code>/autochat</code> <code>/instaon</code> <code>/instaoff</code> <code>/stickeron</code> <code>/stickeroff</code> <code>/movieon</code> <code>/movieoff</code> <code>/summaryon</code> <code>/summaryoff</code> <code>/summarynow</code> <code>/trending</code> <code>/tradelert</code></p>
+    </details>
+    <details>
+      <summary>Admins — moderation</summary>
+      <p><code>/setwc</code> <code>/warn</code> <code>/warns</code> <code>/mywarns</code> <code>/clearwarns</code> <code>/dellast</code> <code>/delall</code> <code>/groups</code> <code>/pause</code> <code>/resume</code> <code>/clear</code> <code>/confirm</code> <code>/cancel</code> <code>/addadmin</code> <code>/removeadmin</code> <code>/admins</code> <code>/increaselimit</code></p>
+    </details>
+    <details>
+      <summary>Owner</summary>
+      <p><code>/addpremium</code> <code>/removepremium</code> <code>/premium</code> <code>/addmod</code> <code>/removemod</code> <code>/assist</code> <code>/fix</code> <code>/heal</code> <code>/addchannel</code> <code>/removechannel</code> <code>/channels</code> <code>/scrap</code> <code>/scrapmembers</code> <code>/broadcast</code> <code>/grouppost</code> <code>/driveurl</code> <code>/deploy</code></p>
+    </details>
+    <h3>Typical group setup</h3>
+    <ol>
+      <li>Add the bot to the group (promote to admin if you need deletes, warns or kicks).</li>
+      <li><code>/activate</code> — turns on default group features and shows the owner @mention.</li>
+      <li>Optionally toggle: <code>/movieon</code>, <code>/newson</code>, <code>/githubon</code>, <code>/instaon</code>, <code>/summaryon</code>, <code>/autochat on</code>, <code>/tradelert on</code>.</li>
+    </ol>
+  </div>
+</section>
+
+<section id="setup">
+  <div class="wrap">
+    <h2>Setup</h2>
+    <pre><code>git clone https://github.com/ProNoob-Dev/WA-BOT.git
+cd WA-BOT
+npm install
+cp .env.example .env   # then edit values
+npm start</code></pre>
+    <p>Set at least <code>MONGODB_URI</code> and <code>OWNER_NUMBERS</code> in <code>.env</code>. Run <code>npm start</code> and scan the QR from the terminal with WhatsApp. Auth is saved in MongoDB — redeploys keep the session if the same DB is used. Dev mode: <code>npm run dev</code>. Fresh QR: <code>npm run clear-auth</code>. Offline checks: <code>npm test</code>.</p>
+    <p>Full variable list with comments: <a href="https://github.com/ProNoob-Dev/WA-BOT/blob/main/.env.example">.env.example</a>. Deploy guides: <a href="https://github.com/ProNoob-Dev/WA-BOT/blob/main/DEPLOY.md">Render</a> and <a href="https://github.com/ProNoob-Dev/WA-BOT/blob/main/DEPLOY_KOYEB.md">Koyeb</a> (free tier, never sleeps).</p>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>FAQ</h2>
+    <details open>
+      <summary>Does it stay logged in after a redeploy?</summary>
+      <p>Yes. The WhatsApp session lives in MongoDB, not a local auth folder. Redeploy with the same database and the bot comes back without a new QR.</p>
+    </details>
+    <details>
+      <summary>Can I run two copies at once?</summary>
+      <p>No — one live instance should hold the session. A second instance fights for it and both get logged out (there's an instance lock in the code).</p>
+    </details>
+    <details>
+      <summary>What do free users get?</summary>
+      <p>Daily limits on movie search and bypasses. Premium and staff are unlimited — the owner grants premium with <code>/addpremium</code>.</p>
+    </details>
+    <details>
+      <summary>Where do the short links point?</summary>
+      <p>To the bot's own server (<code>/d/&lt;code&gt;</code>), not a public shortener. They expire in 7 hours.</p>
+    </details>
+    <details>
+      <summary>Which LLM keys do I need?</summary>
+      <p>At least one of Gemini, Groq, NVIDIA or OpenRouter. The routers fall through the chain, so one key is enough to start and more keys just add resilience.</p>
+    </details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>WA-BOT · built by <a href="https://github.com/ProNoob-Dev">Jaikishan Bagul</a> · <a href="https://www.linkedin.com/in/jaikishan-bagul/">LinkedIn</a> · <a href="https://github.com/ProNoob-Dev/WA-BOT">GitHub</a> · ISC license</p>
+    <p class="dim">Diagrams on this page are generated from <code>docs/assets/build-*.py</code> — edit the script, not the SVG.</p>
+  </div>
+</footer>
+
+<script src="assets/script.js"></script>
+</body>
+</html>
