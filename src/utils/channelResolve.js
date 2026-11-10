@@ -34,6 +34,37 @@ export function isChannelInviteEntry(entry) {
 }
 
 /**
+ * Parse a whatsapp.com/channel/<code>[/<messageId>] link.
+ * @param {string} value
+ * @returns {{ code: string, messageId: string } | null}
+ */
+export function parseChannelMessageLink(value) {
+    const m = String(value || '').match(/https?:\/\/(?:www\.)?whatsapp\.com\/channel\/([^\s\/'"]+)(?:\/(\d+))?/i);
+    if (!m) return null;
+    return { code: m[1], messageId: m[2] || '' };
+}
+
+/**
+ * All channel-message links in a text (deduped, order preserved).
+ * @param {string} text
+ * @returns {Array<{ code: string, messageId: string }>}
+ */
+export function extractChannelMessageLinks(text) {
+    const out = [];
+    const seen = new Set();
+    for (const m of String(text || '').matchAll(/https?:\/\/(?:www\.)?whatsapp\.com\/channel\/[^\s"'<>]+/gi)) {
+        const parsed = parseChannelMessageLink(m[0]);
+        if (!parsed) continue;
+        const k = `${parsed.code}/${parsed.messageId}`;
+        if (!seen.has(k)) {
+            seen.add(k);
+            out.push(parsed);
+        }
+    }
+    return out;
+}
+
+/**
  * @param {import('baileys').WASocket} sock
  * @param {string} inviteCode
  * @returns {Promise<{ jid: string, name: string } | null>}

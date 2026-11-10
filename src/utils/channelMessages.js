@@ -86,13 +86,13 @@ async function parseNewsletterMessageNode(sock, node, channelJid) {
  * @param {number} count
  * @returns {Promise<import('baileys').proto.IWebMessageInfo[]>}
  */
-export async function fetchNewsletterMessages(sock, channelJid, count = 20) {
+export async function fetchNewsletterMessages(sock, channelJid, count = 20, after) {
     if (!sock?.newsletterFetchMessages) {
         return [];
     }
 
     try {
-        const result = await sock.newsletterFetchMessages(channelJid, count);
+        const result = await sock.newsletterFetchMessages(channelJid, count, undefined, after);
         if (!result || typeof result !== 'object') {
             return [];
         }
@@ -128,6 +128,57 @@ export async function fetchNewsletterMessages(sock, channelJid, count = 20) {
         logger.debug(`fetchNewsletterMessages skipped for ${channelJid}: ${error.message}`);
         return [];
     }
+}
+
+/**
+ * Find one channel message by server ID, paging back through history.
+ * Empty messageId = the latest message. Bounded (3 pages, 20s total) — the
+ * fetch API is known-flaky, so a miss/timeout returns null, never throws.
+ * @param {import('baileys').WASocket} sock
+ * @param {string} channelJid
+ * @param {string} messageId
+ * @param {object} [opts]
+ * @param {number} [opts.pages]
+ * @param {number} [opts.perPage]
+ * @param {number} [opts.budgetMs]
+ * @returns {Promise<import('baileys').proto.IWebMessageInfo | null>}
+ */
+export async function findChannelMessage(sock, channelJid, messageId, { pages = 3, perPage = 25, budgetMs = 20_000 } = {}) {
+    if (!sock?.newsletterFetchMessages || !channelJid) return null;
+    const target = String(messageId || '');
+    const deadline = Date.now() + budgetMs;
+    const seen = new Set();
+    let after;
+    for (let page = 0; page < pages; page++) {
+        const remain = deadline - Date.now();
+        if (remain <= 0) break;
+        let batch = null;
+        try {
+            batch = await Promise.race([
+                fetchNewsletterMessages(sock, channelJid, perPage, after),
+                new Promise((resolve) => setTimeout(() => resolve(null), remain)),
+            ]);
+        } catch {
+            break;
+        }
+        if (!batch?.length) break;
+        if (!target) return batch[0];
+        let grew = false;
+        let minId = null;
+        for (const m of batch) {
+            const id = String(m?.key?.id || '');
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            grew = true;
+            if (id === target) return m;
+            const n = Number(id);
+            if (Number.isFinite(n) && (minId === null || n < minId)) minId = n;
+        }
+        if (!grew) break;
+        after = minId ?? String(batch[batch.length - 1]?.key?.id || '');
+        if (!after) break;
+    }
+    return null;
 }
 
 /**

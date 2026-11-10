@@ -27,6 +27,9 @@ import { isGroupMessage, extractPhoneNumber, normalizePhoneNumber } from '../uti
 import { bypassManyLinks, isBypassableUrl } from '../services/HdHubBypassService.js';
 import { shortLinkService } from '../services/ShortLinkService.js';
 import { urlShortener } from '../utils/urlShortener.js';
+import { extractChannelMessageLinks, resolveChannelInvite } from '../utils/channelResolve.js';
+import { findChannelMessage } from '../utils/channelMessages.js';
+import { getTextForUrlScan } from '../utils/waMessage.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const QR_IMAGE_PATH = resolve(__dirname, '../../assets/payment_qr.jpg');
@@ -514,6 +517,8 @@ class BypassController {
      * Auto-bypass pasted links — no /bypass command needed.
      * DMs: always auto (same as Insta). Groups: only where /bypasson was used
      * (staff opt-in, so the bot doesn't spend strangers' credits uninvited).
+     * A whatsapp.com/channel/<code>/<msgId> link is resolved to that channel
+     * post first — its hubcloud links bypass like pasted ones.
      */
     async maybeAutoBypass(sock, chatId, text, senderJid, msg) {
         if (!this.groupManager) return;
@@ -524,10 +529,32 @@ class BypassController {
                 return;
             }
         }
-        // A message may carry several links — bypass ALL of them in one go
-        const urls = extractBypassableUrls(text).slice(0, BYPASS_MAX_LINKS);
-        if (!urls.length) return;
         if (msg?.key?.fromMe) return;
+        // Direct links in the message, plus links inside a linked channel post.
+        let urls = extractBypassableUrls(text);
+        const channelLinks = extractChannelMessageLinks(text);
+        let hadChannelLink = false;
+        for (const ch of channelLinks) {
+            hadChannelLink = true;
+            try {
+                const hit = await resolveChannelInvite(sock, ch.code);
+                if (!hit?.jid) continue;
+                const found = await findChannelMessage(sock, hit.jid, ch.messageId);
+                if (!found) continue;
+                urls = urls.concat(extractBypassableUrls(getTextForUrlScan(found.message)));
+            } catch (err) {
+                logger.warn(`[Bypass] channel link ${ch.code}/${ch.messageId || 'latest'} failed: ${err?.message || err}`);
+            }
+        }
+        urls = [...new Set(urls)].slice(0, BYPASS_MAX_LINKS);
+        if (!urls.length) {
+            if (hadChannelLink) {
+                await sendAndDelete(sock, chatId, {
+                    text: '⚠️ *Couldn\'t get links from that channel message.*\n\n_The post wasn\'t found, or it has no hubcloud links in it. Paste the direct links instead, or use_ `/bypass <link>`.',
+                }, msg);
+            }
+            return;
+        }
         void this._runBypass(sock, chatId, senderJid, urls, msg, msg?.pushName || '');
     }
 }
