@@ -8,7 +8,7 @@
 
 One WhatsApp bot that runs a whole group: movies with working download links, Instagram downloads, stickers, tech news, GitHub trending, trade alerts, and an LLM that answers DMs, writes the daily recap, and heals the bot itself. Built on [Baileys](https://github.com/WhiskeySockets/Baileys) 7, Node.js 22, MongoDB. One live instance holds the WhatsApp session.
 
-![WA-BOT in a chat — a hubcloud link is pasted, the bot replies with bypassed short links, then does the same for a channel post](docs/assets/chat-demo.svg)
+![WA-BOT in a chat — a hubcloud link is pasted, the bot replies with bypassed short links](docs/assets/chat-demo.svg)
 
 **Site:** [pronoob-dev.github.io/WA-BOT](https://pronoob-dev.github.io/WA-BOT) · **Deploy:** [Render](DEPLOY.md) · [Koyeb](DEPLOY_KOYEB.md) (free tier, never sleeps) · **Agent rules:** [AGENTS.md](AGENTS.md)
 
@@ -29,10 +29,6 @@ Paste a hubcloud / hubdrive / gdflix link in a DM and it bypasses itself — no 
 - **Hubcloud TLDs rotate; the bot doesn't care.** Every successful fetch records the live TLD after redirects, and a failed fetch probes the other known TLDs. No more hand-editing links when hubcloud moves.
 - **Short links are its own.** Every direct link gets a self-hosted `/d/` link that expires in 7 hours, so a leaked link dies on its own.
 - **It can't get stuck.** Progress edits are fire-and-forget, every short-link mint is capped at 8 seconds, and a stalled result edit falls back to a fresh message. A hung edit or a slow database used to freeze the whole bypass; now the run always finishes.
-
-![Channel link to bypassed post — paste a channel link, the bot opens that post and bypasses every hubcloud link in it](docs/assets/channel-flow.svg)
-
-A `whatsapp.com/channel/…/2289` link works the same way: the bot resolves the channel, pages back through its history (up to 125 posts) to find that exact post, and bypasses every hubcloud link inside it. If the post can't be found, it says so instead of staying silent.
 
 Free users get daily limits on movie search and bypasses; premium and staff are unlimited.
 
@@ -59,7 +55,7 @@ On an error or a quota hit, the request falls through to the next provider; a de
 |------|----------------|
 | **Courses** | Polls free courses and posts to activated groups (no duplicates per group) |
 | **Movies** | `/movie` search with live progress, daily limits, premium, short links, TMDB upcoming / genre / trending |
-| **Bypass** | Auto-bypass in DMs and `/bypasson` groups; channel links; hubcloud TLD auto-detect |
+| **Bypass** | Auto-bypass in DMs and `/bypasson` groups; hubcloud TLD auto-detect |
 | **Instagram** | Download posts/reels (`/insta`); auto-download in DMs and groups with `/instaon` |
 | **Stickers** | Create/steal/convert stickers; auto-forward from WhatsApp channels into target groups |
 | **News** | Scheduled Inshorts tech digests (`/newson`) |

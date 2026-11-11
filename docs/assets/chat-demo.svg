@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="800" height="460" viewBox="0 0 800 460" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="WhatsApp chat: a hubcloud link is pasted and WA-BOT replies with bypassed short links">
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="310" viewBox="0 0 800 310" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" role="img" aria-label="WhatsApp chat: a hubcloud link is pasted and WA-BOT replies with bypassed short links">
   <defs>
     <linearGradient id="hdr" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#24343d"/><stop offset="1" stop-color="#1f2c34"/>
     </linearGradient>
   </defs>
   <!-- depth: offset shadow layer -->
-  <rect x="10" y="12" width="780" height="440" rx="18" fill="#04110a"/>
-  <rect x="0" y="0" width="780" height="440" rx="18" fill="#0b141a"/>
+  <rect x="10" y="12" width="780" height="290" rx="18" fill="#04110a"/>
+  <rect x="0" y="0" width="780" height="290" rx="18" fill="#0b141a"/>
   <!-- header -->
   <rect x="0" y="0" width="780" height="56" rx="18" fill="url(#hdr)"/>
   <rect x="0" y="38" width="780" height="18" fill="#1f2c34"/>
@@ -52,21 +52,5 @@
       <animate attributeName="width" values="0;0;440;440;0" keyTimes="0;0.32;0.46;0.93;1" dur="14s" repeatCount="indefinite"/>
     </rect>
     <text x="40" y="290" font-size="11.5" fill="#8696a0">3 free bypasses left today · premium unlimited</text>
-  </g>
-
-  <!-- user bubble 2 : channel link -->
-  <g opacity="1">
-    <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.93;1" dur="14s" repeatCount="indefinite"/>
-    <rect x="300" y="306" width="460" height="44" rx="10" fill="#005c4b"/>
-    <text x="316" y="333" font-size="15" fill="#e9edef">whatsapp.com/channel/0029Vb…/2289</text>
-    <text x="744" y="340" font-size="11" fill="#9fc5b8" text-anchor="end">15:33</text>
-  </g>
-
-  <!-- bot reply 2 : channel post bypassed -->
-  <g opacity="1">
-    <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.93;1" dur="14s" repeatCount="indefinite"/>
-    <rect x="20" y="362" width="560" height="64" rx="10" fill="#202c33"/>
-    <circle cx="50" cy="383" r="9" fill="#25D366"/><path d="M45.5,383 l3.2,3.6 l6,-7.2" stroke="#06281a" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="66" y="388" font-size="15" font-weight="700" fill="#e9edef">5 links bypassed from that channel post</text>
-    <text x="40" y="410" font-size="12" fill="#8696a0">OTHER MOMMY (2026) · 2160p / 1080p / 720p · Hindi + English</text>
   </g>
 </svg>

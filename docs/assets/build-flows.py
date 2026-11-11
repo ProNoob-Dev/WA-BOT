@@ -3,7 +3,6 @@
 
 Outputs (dark cards, SMIL-animated, self-contained):
   bypass-flow.svg   — paste link -> detect -> resolve -> shorten -> reply
-  channel-flow.svg  — channel link -> invite -> fetch post -> extract -> bypass all
   schedule.svg      — a day with the bot (09:00 open, through-the-day jobs, 23:55 close)
 
 Run: python3 docs/assets/build-flows.py
@@ -126,13 +125,6 @@ if __name__ == "__main__":
         ("Mint a short link", "/d/ link · 7h expiry"),
         ("Reply with links", "never gets stuck"),
     ])
-    stepper(os.path.join(here, "channel-flow.svg"), "CHANNEL LINK · BYPASSED POST", AMBER, [
-        ("Paste channel link", "channel link /2289"),
-        ("Resolve the invite", "invite to @newsletter"),
-        ("Fetch the post", "125 posts deep"),
-        ("Extract hubcloud links", "every link in it"),
-        ("Bypass them all", "5 at once"),
-    ])
     schedule(os.path.join(here, "schedule.svg"))
     router(os.path.join(here, "llm-router.svg"))
-    print("bypass-flow.svg, channel-flow.svg, schedule.svg, llm-router.svg written")
+    print("bypass-flow.svg, schedule.svg, llm-router.svg written")

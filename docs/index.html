@@ -37,7 +37,7 @@
       <a class="btn primary" href="https://github.com/ProNoob-Dev/WA-BOT">View on GitHub →</a>
       <a class="btn" href="#setup">Run it in four commands</a>
     </div>
-    <img class="diagram hero-diagram" src="assets/chat-demo.svg" alt="WhatsApp chat: a hubcloud link is pasted and WA-BOT replies with bypassed short links, then does the same for a channel post" width="800" height="460">
+    <img class="diagram hero-diagram" src="assets/chat-demo.svg" alt="WhatsApp chat: a hubcloud link is pasted and WA-BOT replies with bypassed short links" width="800" height="310">
   </div>
 </section>
 
@@ -47,8 +47,6 @@
     <p>Paste a hubcloud, hubdrive or gdflix link in a DM and it bypasses itself — no command needed. Groups work the same once a staff member runs <code>/bypasson</code>. Or <code>/bypass &lt;link&gt;</code> anywhere, up to 5 links at once.</p>
     <img class="diagram" src="assets/bypass-flow.svg" alt="Bypass pipeline: paste a link, detect the host, resolve it, mint a short link, reply" width="900" height="220">
     <p>Hubcloud TLDs rotate; the bot doesn't care. Every successful fetch records the live TLD after redirects, and a failed fetch probes the other known TLDs — no more hand-editing links when hubcloud moves. Every direct link gets a self-hosted <code>/d/</code> link that expires in 7 hours, so a leaked link dies on its own. And it can't get stuck: progress edits are fire-and-forget, every short-link mint is capped at 8 seconds, and a stalled result edit falls back to a fresh message.</p>
-    <img class="diagram" src="assets/channel-flow.svg" alt="Channel link to bypassed post: paste a channel link, the bot opens that post and bypasses every hubcloud link in it" width="900" height="220">
-    <p>A <code>whatsapp.com/channel/…/2289</code> link works the same way: the bot resolves the channel, pages back through its history (up to 125 posts) to find that exact post, and bypasses every hubcloud link inside it. If the post can't be found, it says so instead of staying silent.</p>
   </div>
 </section>
 
@@ -85,7 +83,7 @@
     <h2>What it does</h2>
     <div class="grid">
       <div class="card"><h3>Movies</h3><p><code>/movie</code> search with live progress, short links, TMDB upcoming, genre and trending.</p></div>
-      <div class="card"><h3>Bypass</h3><p>Auto-bypass in DMs and <code>/bypasson</code> groups, channel links, hubcloud TLD auto-detect.</p></div>
+      <div class="card"><h3>Bypass</h3><p>Auto-bypass in DMs and <code>/bypasson</code> groups, hubcloud TLD auto-detect.</p></div>
       <div class="card"><h3>Instagram</h3><p>Download posts and reels (<code>/insta</code>); auto-download in DMs and groups with <code>/instaon</code>.</p></div>
       <div class="card"><h3>Stickers</h3><p>Create, steal and convert stickers; auto-forward from WhatsApp channels into target groups.</p></div>
       <div class="card"><h3>Courses</h3><p>Polls free courses and posts to activated groups, no duplicates per group.</p></div>
