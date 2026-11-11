@@ -555,7 +555,11 @@ class BypassController {
                 }
                 const found = await findChannelMessage(sock, hit.jid, ch.messageId);
                 if (!found) continue;
-                urls = urls.concat(extractBypassableUrls(getTextForUrlScan(found.message)));
+                const fromPost = extractBypassableUrls(getTextForUrlScan(found.message));
+                if (!fromPost.length) {
+                    logger.warn(`[Bypass] channel link ${ch.code}/${ch.messageId || 'latest'}: post ${found.key?.id} found but has no bypassable links`);
+                }
+                urls = urls.concat(fromPost);
             } catch (err) {
                 logger.warn(`[Bypass] channel link ${ch.code}/${ch.messageId || 'latest'} failed: ${err?.message || err}`);
             }
