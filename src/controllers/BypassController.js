@@ -115,6 +115,7 @@ function formatBypassResult({ results, remaining, unlimited }) {
             msg += `┌ 📌 ${l.label}\n`;
             msg += `└ 🔗 ${l.url}\n`;
         }
+        if (r.note) msg += `⚠️ _${r.note}_\n`;
         if (results.length > 1 && r.links.length === 0) {
             msg += '┌ ⚠️ No bypassable servers found\n└ —\n';
         }

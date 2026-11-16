@@ -6,7 +6,7 @@
  *   - hubcloud.<tld>/drive/ID → a#download → gamerxyt.com/hubcloud.php → final servers
  *   - hubdrive.<tld>/file/ID → hubcloud /drive page (same as above)
  *   - nexdrive.you/genxfmID → ad-lockered — best-effort only
- *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com, plus the page's mirrors (Telegram / MGT Server / GoFile / DriveBot). When the direct fetch is CF-blocked on a datacenter IP, the same link gets cache-bust retries plus a reader-proxy fallback (jina raw HTML carries the key; urltomarkdown on the final host recovers title/size).
+ *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com, plus the page's mirrors (Telegram / MGT Server / GoFile / DriveBot). When the direct fetch is CF-blocked on a datacenter IP, the known mirror host (new<N>.gdflix.io) is tried directly, then the same link gets cache-bust retries plus a reader-proxy fallback (jina raw HTML carries the key; urltomarkdown on the final host recovers title/size). Mirrors from a reader page are returned even when the POST can't complete, with a note that the Drive link is unavailable.
  *
  * Final servers surfaced: R2 cloudflarestorage (presigned + r2.dev), 10Gbps,
  * FSLv2, FuckingFast, PixelDrain (/bypass command only). Telegram mirrors skipped.
@@ -576,6 +576,38 @@ function isCfChallengePage(html) {
     return /<title[^>]*>\s*(just a moment|attention required)/i.test(String(html || ''));
 }
 
+/** gdflix mirror host (new<N>.gdflix.io) the entry URL 302s to. The entry
+ * host (gdflix.dev) challenges datacenter IPs, but the mirror host may
+ * not — same Cloudflare account, different zone rules — so when the entry
+ * fetch is challenged/dead we try the mirror host directly. Seed verified
+ * live 16 Nov 2026; noteGdflixHost keeps it current whenever a fetch lands
+ * on a mirror host (same pattern as hubcloudLiveTld). */
+const GDFLIX_MIRROR_SEED = 'new10.gdflix.io';
+let gdflixLiveHost = null;
+
+/** Remember a gdflix mirror host seen on a real fetch (entry host excluded). */
+function noteGdflixHost(urlStr) {
+    const h = hostOf(urlStr);
+    if (/\.gdflix\.io$/i.test(h) && h !== gdflixLiveHost) {
+        gdflixLiveHost = h;
+        logger.info(`[HdHubBypass] gdflix live mirror host → ${h}`);
+    }
+}
+
+/** Same gdflix /file/ URL on the last-known mirror host ('' when none / same host). */
+function gdflixMirrorUrl(urlStr) {
+    const host = gdflixLiveHost || GDFLIX_MIRROR_SEED;
+    if (!host) return '';
+    try {
+        const u = new URL(urlStr);
+        if (u.hostname.toLowerCase() === host.toLowerCase()) return '';
+        u.hostname = host;
+        return u.href;
+    } catch {
+        return '';
+    }
+}
+
 /** GDFlix title from HTML (<title>) or reader markdown ("Name : …"). The
  * "GDFlix | " prefix is stripped and the full filename kept (up to 160 chars). */
 export function gdflixTitleFromText(text) {
@@ -640,40 +672,69 @@ export async function gdflixPost(html, postUrl, timeoutMs) {
     }
 }
 
-/** gdflix /file/ page → direct Google Drive link via its own "Direct Download" POST.
- * The page's mirrors are returned alongside the Drive link; when the POST
- * yields nothing, the mirrors alone are the fallback. */
-async function bypassGdflix(urlStr, timeoutMs) {
-    let html = '';
-    let finalUrl = urlStr;
-    let status = 0;
+/** GET one gdflix /file/ page. Returns { html, finalUrl, status } or null on a failed fetch. */
+async function getGdflixPage(u, timeoutMs) {
     try {
-        const res = await axios.get(canonicalizeHost(urlStr), {
+        const res = await axios.get(canonicalizeHost(u), {
             timeout: timeoutMs,
             maxRedirects: 5,
             maxContentLength: 3 * 1024 * 1024,
             headers: DEFAULT_HEADERS,
             validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
         });
-        html = typeof res.data === 'string' ? res.data : String(res.data || '');
-        finalUrl = finalUrlOf(res, urlStr);
-        status = res.status;
+        return {
+            html: typeof res.data === 'string' ? res.data : String(res.data || ''),
+            finalUrl: finalUrlOf(res, u),
+            status: res.status,
+        };
     } catch (err) {
         logger.warn(`[HdHubBypass] gdflix page fetch failed: ${err?.message || err}`);
-        return [];
+        return null;
     }
-    // A Cloudflare challenge page carries no key and no mirrors — say so
-    // plainly instead of failing silently, so the host logs name the cause.
-    if (isCfChallengePage(html)) {
-        logger.warn(`[HdHubBypass] gdflix CF challenge page (HTTP ${status}) — direct POST impossible, reader fallback will try`);
-        return [];
+}
+
+/** True when a fetched gdflix page is useless — a challenge page, or a
+ * WAF/rate-limit junk page carrying neither the Direct Download key nor
+ * any mirror link. The mirror host is worth one try for such a page. */
+function isUselessGdflixPage(html) {
+    if (!html || isCfChallengePage(html)) return true;
+    return !/formData\.append\("key"/.test(html) && bypassGdflixFromHtml(html).length === 0;
+}
+
+/** gdflix /file/ page → direct Google Drive link via its own "Direct Download" POST.
+ * The page's mirrors are returned alongside the Drive link; when the POST
+ * yields nothing, the mirrors alone are the fallback. When the entry host
+ * is challenged/dead from this IP, the known mirror host is tried directly
+ * (it may not challenge this IP). Returns { links, title, size }. */
+async function bypassGdflix(urlStr, timeoutMs) {
+    let page = await getGdflixPage(urlStr, timeoutMs);
+    if (!page || isUselessGdflixPage(page.html)) {
+        // Entry host challenged/dead (or serving junk) — try the mirror host directly.
+        const mirrorUrl = gdflixMirrorUrl(urlStr);
+        if (mirrorUrl) {
+            logger.warn(`[HdHubBypass] gdflix entry host challenged/dead — trying mirror host ${hostOf(mirrorUrl)}`);
+            const mp = await getGdflixPage(mirrorUrl, timeoutMs);
+            if (mp && !isUselessGdflixPage(mp.html)) {
+                page = mp;
+                noteGdflixHost(page.finalUrl);
+                logger.info(`[HdHubBypass] gdflix mirror host ${hostOf(page.finalUrl)} served the page`);
+            }
+        }
     }
-    const direct = await gdflixPost(html, finalUrl, timeoutMs);
+    if (!page) {
+        logger.warn('[HdHubBypass] gdflix page fetch failed on entry and mirror hosts — reader fallback will try');
+        return { links: [], title: '', size: '' };
+    }
+    if (isCfChallengePage(page.html)) {
+        logger.warn(`[HdHubBypass] gdflix CF challenge page (HTTP ${page.status}) — direct POST impossible, reader fallback will try`);
+        return { links: [], title: '', size: '' };
+    }
+    const direct = await gdflixPost(page.html, page.finalUrl, timeoutMs);
+    const links = [...bypassGdflixFromHtml(page.html)];
     if (/^https?:\/\//i.test(direct)) {
-        // The POST yields the Drive link; the same page already lists the mirrors — return both.
-        return [...bypassGdflixFromHtml(html), { label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) }];
+        links.push({ label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) });
     }
-    return bypassGdflixFromHtml(html);
+    return { links, title: gdflixTitleFromText(page.html), size: gdflixSizeFromHtml(page.html) };
 }
 
 /** gdflix fallback for a CF-blocked / dead direct fetch: recover what the
@@ -696,20 +757,31 @@ export async function resolveGdflixViaProxy(urlStr, timeoutMs) {
         });
         if (r.status >= 300 && r.status < 400 && typeof r.headers?.location === 'string') {
             finalUrl = new URL(r.headers.location, urlStr).href;
+            noteGdflixHost(finalUrl);
         }
     } catch {}
     const jinaHtml = await fetchJinaHtml(finalUrl || urlStr, proxyTimeout);
-    if (jinaHtml && /formData\.append\("key"/.test(jinaHtml)) {
-        const direct = await gdflixPost(jinaHtml, finalUrl || urlStr, proxyTimeout);
+    if (jinaHtml) {
+        // The mirrors live in the page HTML itself — return them even when
+        // the key is missing or the Direct Download POST is blocked from
+        // this server. Only the POST needs the key.
         const links = [...bypassGdflixFromHtml(jinaHtml)];
-        if (direct) links.push({ label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) });
+        if (/formData\.append\("key"/.test(jinaHtml)) {
+            const direct = await gdflixPost(jinaHtml, finalUrl || urlStr, proxyTimeout);
+            if (direct) links.push({ label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) });
+        }
         if (links.length) {
+            noteGdflixHost(jinaHtml.match(/https?:\/\/([a-z0-9-]+\.gdflix\.io)/i)?.[0] || '');
             return { title: gdflixTitleFromText(jinaHtml), size: gdflixSizeFromHtml(jinaHtml), links };
         }
     }
-    if (finalUrl) {
+    // urltomarkdown can't follow the entry host's 302, so when the redirect
+    // target was never learned (challenged GET), use the known mirror host.
+    // It recovers title + size only — mirrors don't survive markdown.
+    const mdUrl = finalUrl || gdflixMirrorUrl(urlStr);
+    if (mdUrl) {
         try {
-            const md = await fetchViaUrltomarkdown(finalUrl, proxyTimeout);
+            const md = await fetchViaUrltomarkdown(mdUrl, proxyTimeout);
             const title = gdflixTitleFromText(md);
             const size = gdflixSizeFromHtml(md);
             if (title || size) return { title, size, links: [] };
@@ -761,7 +833,7 @@ async function resolveLink(rawUrl, budgetMs) {
     const host = hostOf(urlStr);
 
     try {
-        if (/gdflix\./i.test(host)) return await bypassGdflix(urlStr, timeoutMs);
+        if (/gdflix\./i.test(host)) return (await bypassGdflix(urlStr, timeoutMs)).links;
         if (/hubcdn\./i.test(host)) return await bypassHubcdn(urlStr, timeoutMs);
         if (/hubdrive\.|hdstream4u\./i.test(host)) return await bypassHubdrive(urlStr, timeoutMs);
         if (/hubcloud\.|hubstream\.|driveseed\./i.test(host)) return await bypassHubcloud(urlStr, timeoutMs);
@@ -890,8 +962,16 @@ async function resolveForUser(urlStr, host, timeoutMs) {
         ? rawTitle.replace(/^GDFlix\s*\|\s*/i, '').slice(0, 160)
         : rawTitle.slice(0, 90);
     let size = /gdflix\./i.test(host) && !challenged ? gdflixSizeFromHtml(html) : '';
+    // bypassGdflix returns { links, title, size } — the page it fetched (entry
+    // or mirror host) is the title/size source when the first fetch was challenged.
+    let gdflixMeta = null;
     const extract = (h) => {
-        if (/gdflix\./i.test(host)) return bypassGdflix(urlStr, timeoutMs);
+        if (/gdflix\./i.test(host)) {
+            return bypassGdflix(urlStr, timeoutMs).then((r) => {
+                if (r?.title || r?.size) gdflixMeta = r;
+                return r?.links || [];
+            });
+        }
         if (/hubcdn\./i.test(host)) return bypassHubcdnFromHtml(h);
         if (/hubdrive\.|hdstream4u\./i.test(host)) return bypassHubdriveFromHtml(h, urlStr, timeoutMs);
         return bypassHubcloudFromHtml(h, urlStr, timeoutMs);
@@ -966,7 +1046,19 @@ async function resolveForUser(urlStr, host, timeoutMs) {
             logger.warn(`[HdHubBypass] gdflix reader fallback failed: ${e?.message || e}`);
         }
     }
-    return { title, size, links: dedupeLinks(links) };
+    // Title/size from the page bypassGdflix itself fetched (mirror host when
+    // the entry was challenged) — the first fetch above may have been a challenge page.
+    if (!title && gdflixMeta?.title) title = gdflixMeta.title;
+    if (!size && gdflixMeta?.size) size = gdflixMeta.size;
+    // gdflix without a Drive link: the mirrors still work, but say so plainly —
+    // the Drive link comes from a POST the datacenter IP can't complete.
+    const linksOut = dedupeLinks(links);
+    let note = '';
+    if (/gdflix\./i.test(host) && linksOut.length && !linksOut.some((l) => l.serverKey === 'gdrive')) {
+        note = 'Direct Drive link unavailable from this server — use a mirror below.';
+        logger.warn('[HdHubBypass] gdflix returning mirrors only, no Drive link (POST blocked/failed)');
+    }
+    return { title, size, links: linksOut, ...(note ? { note } : {}) };
 }
 
 /**
