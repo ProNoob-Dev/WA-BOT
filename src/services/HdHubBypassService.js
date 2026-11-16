@@ -6,7 +6,7 @@
  *   - hubcloud.<tld>/drive/ID → a#download → gamerxyt.com/hubcloud.php → final servers
  *   - hubdrive.<tld>/file/ID → hubcloud /drive page (same as above)
  *   - nexdrive.you/genxfmID → ad-lockered — best-effort only
- *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com; mirrors as fallback
+ *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com, plus the page's mirrors (Telegram / MGT Server / GoFile / DriveBot)
  *
  * Final servers surfaced: R2 cloudflarestorage (presigned + r2.dev), 10Gbps,
  * FSLv2, FuckingFast, PixelDrain (/bypass command only). Telegram mirrors skipped.
@@ -305,22 +305,24 @@ function bypassHubcdnFromHtml(html) {
     return [{ label: 'R2 ⚡', serverKey: 'r2', url: sanitizeUrl(target) }];
 }
 
-/** GDFlix page mirrors, classified by host. */
+/** GDFlix page mirrors, classified by host — labels match what users see on the page. */
 function gdflixMirrorLabel(urlStr) {
     if (/instant\.busycdn/i.test(urlStr)) return 'Instant ⚡';
-    if (/filesgram/i.test(urlStr)) return 'Filesgram';
-    if (/multiup/i.test(urlStr)) return 'MultiUp';
+    if (/filesgram|tgredirect/i.test(urlStr)) return 'Telegram';
+    if (/goflix\.sbs/i.test(urlStr)) return 'GoFile';
+    if (/indexserver\.shop/i.test(urlStr)) return 'MGT Server';
     if (/drivebot\.sbs/i.test(urlStr)) return 'DriveBot';
-    if (/tgredirect/i.test(urlStr)) return 'Telegram';
+    if (/multiup/i.test(urlStr)) return 'MultiUp';
     return '';
 }
 
-/** GDFlix /file/ HTML → pre-generated mirror links (fallback when the Direct Download POST yields nothing). */
+/** GDFlix /file/ HTML → pre-generated mirror links (returned alongside the Direct Download POST result; the whole set when the POST yields nothing). */
 function bypassGdflixFromHtml(html) {
     const out = [];
     const seen = new Set();
     const push = (u) => {
-        u = sanitizeUrl(u);
+        // Page HTML entity-encodes query separators (&amp;) — decode before parsing or the link breaks.
+        u = sanitizeUrl(String(u).replace(/&amp;/g, '&'));
         const label = gdflixMirrorLabel(u);
         if (!label) return;
         const k = u.replace(/[?#].*$/, '');
@@ -330,7 +332,7 @@ function bypassGdflixFromHtml(html) {
         }
     };
     for (const m of html.matchAll(/(?:data-url|data-href|href)="(https?:[^"\s]+)"/gi)) push(m[1]);
-    for (const m of html.matchAll(/["'](https?:[^"'\s]*?(?:busycdn|filesgram|multiup|drivebot|tgredirect)[^"'\s]*)["']/gi)) push(m[1]);
+    for (const m of html.matchAll(/["'](https?:[^"'\s]*?(?:busycdn|filesgram|multiup|drivebot|tgredirect|goflix|indexserver)[^"'\s]*)["']/gi)) push(m[1]);
     return out;
 }
 
@@ -539,13 +541,18 @@ async function bypassNexdrive(urlStr, timeoutMs) {
     return extractServerLinks(html);
 }
 
+/** GDFlix /file/ HTML → "964.09MB" from the `Size : …` list item (or ''). */
+function gdflixSizeFromHtml(html) {
+    return html.match(/Size\s*:\s*([\d.]+\s*(?:KB|MB|GB))/i)?.[1] || '';
+}
+
 /** gdflix /file/ page → direct Google Drive link via its own "Direct Download" POST.
  * The page embeds a key (and a Turnstile token the widget fills in browsers);
  * POSTing action=direct with the key returns { url: "https://drive.google.com/open?id=…" }.
  * The server answers even with an empty token (verified live), so the token
  * is sent when present but never gates the attempt. action=original needs a
- * logged-in session, so it is never attempted. Falls back to the pre-generated
- * mirrors when the POST yields nothing. */
+ * logged-in session, so it is never attempted. The page's mirrors are returned
+ * alongside the Drive link; when the POST yields nothing, the mirrors alone are the fallback. */
 async function bypassGdflix(urlStr, timeoutMs) {
     let html = '';
     let finalUrl = urlStr;
@@ -585,7 +592,8 @@ async function bypassGdflix(urlStr, timeoutMs) {
             const direct = !data.error && typeof (data.url || data.visit_url) === 'string'
                 ? (data.url || data.visit_url) : '';
             if (/^https?:\/\//i.test(direct)) {
-                return [{ label: 'Google Drive ⚡', serverKey: 'gdrive', url: sanitizeUrl(direct) }];
+                // The POST yields the Drive link; the same page already lists the mirrors — return both.
+                return [...bypassGdflixFromHtml(html), { label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) }];
             }
         } catch (err) {
             logger.warn(`[HdHubBypass] gdflix direct POST failed: ${err?.message || err}`);
@@ -727,11 +735,11 @@ export async function debugResolve(rawUrl, timeoutMs = 9_000) {
 
 /**
  * Resolve ONE user-supplied link: ONE page fetch yields title AND links.
- * @returns {Promise<{title:string, links:Array<{label:string, url:string}>}>}
+ * @returns {Promise<{title:string, size:string, links:Array<{label:string, url:string}>}>}
  */
 export async function bypassSingleLink(rawUrl, budgetMs = 12_000) {
     const urlStr = canonicalizeHost(String(rawUrl || '').trim());
-    if (!/^https?:\/\//i.test(urlStr)) return { title: '', links: [] };
+    if (!/^https?:\/\//i.test(urlStr)) return { title: '', size: '', links: [] };
     return resolveForUser(urlStr, hostOf(urlStr), perAttemptTimeout(budgetMs));
 }
 
@@ -745,9 +753,14 @@ async function resolveForUser(urlStr, host, timeoutMs) {
         html = await fetchPage(urlStr, { timeoutMs });
     } catch (err) {
         logger.warn(`[HdHubBypass] ${host} page fetch failed: ${err?.message || err}`);
-        return { title: '', links: [] };
+        return { title: '', size: '', links: [] };
     }
-    const title = (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim().slice(0, 90);
+    const rawTitle = (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
+    // GDFlix titles carry a "GDFlix | " prefix; strip it and keep the full filename (up to 160 chars).
+    const title = /gdflix\./i.test(host)
+        ? rawTitle.replace(/^GDFlix\s*\|\s*/i, '').slice(0, 160)
+        : rawTitle.slice(0, 90);
+    const size = /gdflix\./i.test(host) ? gdflixSizeFromHtml(html) : '';
     const extract = (h) => {
         if (/gdflix\./i.test(host)) return bypassGdflix(urlStr, timeoutMs);
         if (/hubcdn\./i.test(host)) return bypassHubcdnFromHtml(h);
@@ -803,7 +816,7 @@ async function resolveForUser(urlStr, host, timeoutMs) {
         logger.warn(`[HdHubBypass] ${host} extract failed: ${err?.message || err}`);
         links = [];
     }
-    return { title, links: dedupeLinks(links) };
+    return { title, size, links: dedupeLinks(links) };
 }
 
 /**
@@ -815,7 +828,7 @@ async function resolveForUser(urlStr, host, timeoutMs) {
  * @param {number} [opts.maxLinks] hard cap per command (default 5)
  * @param {number} [opts.budgetMs] per-link resolution budget
  * @param {number} [opts.concurrency] worker pool size (default config.MOVIE_BYPASS_MAX_CONCURRENT || 6)
- * @returns {Promise<Array<{url:string, title:string, links:Array<{label:string,url:string}>}>>}
+ * @returns {Promise<Array<{url:string, title:string, size:string, links:Array<{label:string,url:string}>}>>}
  */
 export async function bypassManyLinks(urls, { maxLinks = 5, budgetMs = 12_000, concurrency } = {}) {
     const seen = new Set();

@@ -103,7 +103,13 @@ function formatBypassResult({ results, remaining, unlimited }) {
     let msg = '✅ *BYPASS SUCCESSFUL*\n\n';
     let linkTotal = 0;
     for (const r of results) {
-        if (results.length > 1 && r.title) msg += `📄 *${r.title}*\n`;
+        if (r.size) {
+            // GDFlix replies carry the file's own header: mirror link, title, size, then the download list.
+            msg += `🪞 *Mirror*\n${r.url}\n`;
+            if (r.title) msg += `📄 *Title:* ${r.title}\n`;
+            msg += `💾 *Size:* ${r.size}\n`;
+            msg += `📥 *Download Links:*\n`;
+        } else if (results.length > 1 && r.title) msg += `📄 *${r.title}*\n`;
         for (const l of r.links) {
             linkTotal += 1;
             msg += `┌ 📌 ${l.label}\n`;
