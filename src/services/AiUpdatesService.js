@@ -177,6 +177,51 @@ class AiUpdatesService {
         this.cardCache = new Map();
         /** @type {{ at: number, items: Array<object> } | null} */
         this._projectResourceCache = null;
+        /** og:image URLs by article URL — avoids re-fetching the page per group. */
+        this._ogImageCache = new Map();
+    }
+
+    /**
+     * Article's Open Graph image (og:image, falling back to twitter:image).
+     * Used by image mode; returns null when the page has none or can't be read.
+     */
+    async fetchOgImage(url) {
+        if (!url) return null;
+        if (this._ogImageCache.has(url)) {
+            return this._ogImageCache.get(url);
+        }
+        let image = null;
+        try {
+            const resp = await axios.get(url, {
+                headers: HEADERS,
+                timeout: 10000,
+                maxRedirects: 5,
+                validateStatus: (status) => status < 500,
+            });
+            if (resp.status === 200 && resp.data) {
+                const $ = cheerio.load(resp.data);
+                image =
+                    $('meta[property="og:image"]').first().attr('content') ||
+                    $('meta[name="twitter:image"]').first().attr('content') ||
+                    null;
+                if (image) {
+                    image = image.trim();
+                    // Resolve relative URLs against the article page.
+                    if (!/^https?:\/\//i.test(image)) {
+                        try {
+                            image = new URL(image, url).toString();
+                        } catch {
+                            image = null;
+                        }
+                    }
+                }
+            }
+        } catch (err) {
+            logger.warn(`AI updates: og:image fetch failed for ${url}: ${err.message}`);
+            image = null;
+        }
+        this._ogImageCache.set(url, image);
+        return image;
     }
 
     /**

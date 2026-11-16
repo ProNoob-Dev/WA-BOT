@@ -94,6 +94,7 @@ class NewsDatabase {
                             hash,
                             title: article.title.slice(0, 200),
                             summary: (article.summary || '').slice(0, 500),
+                            imageUrl: (article.imageUrl || '').slice(0, 500),
                             scraped_at: new Date(),
                         },
                     },
@@ -108,12 +109,12 @@ class NewsDatabase {
         const postedHashes = await this.posted.distinct('hash');
         const postedSet = new Set(postedHashes);
         const rows = await this.queue
-            .find({}, { projection: { _id: 0, title: 1, summary: 1, hash: 1 } })
+            .find({}, { projection: { _id: 0, title: 1, summary: 1, hash: 1, imageUrl: 1 } })
             .sort({ scraped_at: -1 })
             .toArray();
         return rows
             .filter((row) => !postedSet.has(row.hash))
-            .map((row) => ({ title: row.title, summary: row.summary || '' }));
+            .map((row) => ({ title: row.title, summary: row.summary || '', imageUrl: row.imageUrl || null }));
     }
 
     async clearQueue() {

@@ -1153,6 +1153,35 @@ class GroupManager {
             .toArray();
     }
 
+    /** News images — opt-in via /newsimgon (default off, like AI updates). */
+    async setNewsImgEnabled(groupId, groupName, enabled, setBy) {
+        await this.groups.updateOne(
+            { group_id: groupId },
+            {
+                $set: {
+                    group_name: groupName,
+                    news_img: enabled,
+                    news_img_by: setBy,
+                    news_img_at: new Date(),
+                },
+                $setOnInsert: { group_id: groupId, is_active: false },
+            },
+            { upsert: true }
+        );
+        logger.info(
+            `🖼️ News images ${enabled ? 'enabled' : 'disabled'} for ${groupName || groupId} by ${setBy}`
+        );
+    }
+
+    async isNewsImgEnabled(groupId) {
+        const row = await this.groups.findOne(
+            { group_id: groupId },
+            { projection: { news_img: 1, is_active: 1 } }
+        );
+        if (!row?.is_active) return false;
+        return row.news_img === true;
+    }
+
     async getAllGroups() {
         return this.groups
             .find({}, { projection: { _id: 0 } })
@@ -1862,3 +1891,4 @@ class GroupManager {
 }
 
 export default GroupManager;
+

@@ -1483,6 +1483,94 @@ export async function handleAiUpdatesOff(sock, chatId, senderJid, { groupManager
     }
 }
 
+export async function handleNewsImgOn(sock, chatId, senderJid, { groupManager, originalMsg }) {
+    try {
+        const senderPhone = extractPhoneNumber(senderJid);
+        const isActive = await groupManager.isGroupActive(chatId);
+        if (!isActive) {
+            await sock.sendMessage(chatId, {
+                text:
+                    '━━━━━━━━━━━━━━━━━━━━━━━━━━━\nℹ️ *GROUP NOT ACTIVATED* ℹ️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
+                    'News images requires an activated group.\n\nUse `/activate` first, then `/newsimgon`.',
+            }, { quoted: originalMsg });
+            return;
+        }
+
+        let groupName = 'Unknown Group';
+        try {
+            const meta = await getGroupMeta(sock, chatId, groupManager);
+            groupName = meta.subject;
+        } catch (err) {
+            logger.error(`Error fetching group metadata: ${err.message}`);
+        }
+
+        await groupManager.setNewsImgEnabled(chatId, groupName, true, senderPhone);
+
+        let r = '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+        r += '✅ *NEWS IMAGES ON* ✅\n';
+        r += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+        r += `📢 *Group:* ${groupName}\n\n`;
+        r += '🖼️ TECH FLASH and AI updates will now arrive with the article photo.\n';
+        r += '📰 The text stays the same — headline + full summary, just with the image on top.\n';
+        r += 'An item with no photo still comes as text.\n\n';
+        r += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+        r += '💡 Use `/newsimgoff` to go back to text only';
+
+        await sock.sendMessage(chatId, { text: r }, { quoted: originalMsg });
+        logger.info(`🖼️ News images enabled: ${groupName} (${chatId}) by ${senderPhone}`);
+    } catch (error) {
+        logger.error(`Error enabling news images: ${error.message}`);
+    }
+}
+
+export async function handleNewsImgOff(sock, chatId, senderJid, { groupManager, originalMsg }) {
+    try {
+        const senderPhone = extractPhoneNumber(senderJid);
+        const isActive = await groupManager.isGroupActive(chatId);
+        if (!isActive) {
+            await sock.sendMessage(chatId, {
+                text:
+                    '━━━━━━━━━━━━━━━━━━━━━━━━━━━\nℹ️ *GROUP NOT ACTIVATED* ℹ️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
+                    'This group is not activated.\n\nUse `/activate` to enable updates.',
+            }, { quoted: originalMsg });
+            return;
+        }
+
+        const newsImgEnabled = await groupManager.isNewsImgEnabled(chatId);
+        if (!newsImgEnabled) {
+            await sock.sendMessage(chatId, {
+                text:
+                    '━━━━━━━━━━━━━━━━━━━━━━━━━━━\nℹ️ *NEWS IMAGES ALREADY OFF* ℹ️\n━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
+                    'News images is not enabled in this group.\n\nUse `/newsimgon` to enable it.',
+            }, { quoted: originalMsg });
+            return;
+        }
+
+        let groupName = 'Unknown Group';
+        try {
+            const meta = await getGroupMeta(sock, chatId, groupManager);
+            groupName = meta.subject;
+        } catch (err) {
+            logger.error(`Error fetching group metadata: ${err.message}`);
+        }
+
+        await groupManager.setNewsImgEnabled(chatId, groupName, false, senderPhone);
+
+        let r = '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+        r += '🛑 *NEWS IMAGES OFF* 🛑\n';
+        r += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
+        r += `📢 *Group:* ${groupName}\n\n`;
+        r += '🖼️ TECH FLASH and AI updates go back to text only in this group.\n\n';
+        r += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+        r += '💡 Use `/newsimgon` to enable images again';
+
+        await sock.sendMessage(chatId, { text: r }, { quoted: originalMsg });
+        logger.info(`🖼️ News images disabled: ${chatId} by ${senderPhone}`);
+    } catch (error) {
+        logger.error(`Error disabling news images: ${error.message}`);
+    }
+}
+
 export async function handleAutoChat(sock, chatId, senderJid, args, { groupManager, autoChatController, originalMsg } = {}) {
     try {
         const senderPhone = extractPhoneNumber(senderJid);

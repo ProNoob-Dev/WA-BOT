@@ -42,6 +42,8 @@ import {
     handleGithubOff,
     handleAiUpdatesOn,
     handleAiUpdatesOff,
+    handleNewsImgOn,
+    handleNewsImgOff,
     handleAutoChat,
     handleAwesomeOn,
     handleAwesomeOff,
@@ -612,6 +614,8 @@ export const COMMAND_HANDLERS = {
     githuboff: ({ sock, chatId, senderJid, ctx }) => handleGithubOff(sock, chatId, senderJid, ctx),
     aiupdateson: ({ sock, chatId, senderJid, ctx }) => handleAiUpdatesOn(sock, chatId, senderJid, ctx),
     aiupdatesoff: ({ sock, chatId, senderJid, ctx }) => handleAiUpdatesOff(sock, chatId, senderJid, ctx),
+    newsimgon: ({ sock, chatId, senderJid, ctx }) => handleNewsImgOn(sock, chatId, senderJid, ctx),
+    newsimgoff: ({ sock, chatId, senderJid, ctx }) => handleNewsImgOff(sock, chatId, senderJid, ctx),
     autochat: ({ sock, chatId, senderJid, args, ctx }) => handleAutoChat(sock, chatId, senderJid, args, ctx),
 
     awesomeon: ({ sock, chatId, senderJid, ctx }) => handleAwesomeOn(sock, chatId, senderJid, ctx),

@@ -4,7 +4,12 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { formatAiUpdateMessage } from '../utils/aiUpdatesFormatter.js';
+import {
+    formatAiUpdateMessage,
+    formatAiUpdateImageCaption,
+    formatAiUpdateFollowUp,
+} from '../utils/aiUpdatesFormatter.js';
+import { downloadMediaBuffer } from '../utils/downloadMediaBuffer.js';
 import { sendTextWithLinkPreview } from '../utils/linkPreview.js';
 import AiUpdatesService from '../services/AiUpdatesService.js';
 import AssistLlmRouter from '../services/AssistLlmRouter.js';
@@ -37,15 +42,41 @@ class AiUpdatesController {
         await this.aiUpdatesDatabase.markSlotDone(slotKey, meta);
     }
 
-    async sendItemMessage(sock, chatId, item, { markPosted = true } = {}) {
+    async sendItemMessage(sock, chatId, item, { markPosted = true, imageMode = false } = {}) {
         if (markPosted && this.aiUpdatesDatabase && (await this.aiUpdatesDatabase.isItemPosted(item.url, chatId))) {
             logger.info(`Skipping duplicate AI update for ${chatId}: ${item.title}`);
             return false;
         }
 
         const card = await this.service.generateCardData(item);
-        const text = formatAiUpdateMessage(item, card);
-        await sendTextWithLinkPreview(sock, chatId, text, item.url);
+
+        if (imageMode) {
+            let sentImage = false;
+            try {
+                const imageUrl = await this.service.fetchOgImage(item.url);
+                if (imageUrl) {
+                    const buffer = await downloadMediaBuffer(imageUrl);
+                    await sock.sendMessage(chatId, {
+                        image: buffer,
+                        caption: formatAiUpdateImageCaption(item, card),
+                    });
+                    const followUp = formatAiUpdateFollowUp(card);
+                    if (followUp) {
+                        await sock.sendMessage(chatId, { text: followUp });
+                    }
+                    sentImage = true;
+                }
+            } catch (err) {
+                logger.warn(`AI update image failed for "${item.title}": ${err.message} — sending text`);
+            }
+            if (!sentImage) {
+                const text = formatAiUpdateMessage(item, card);
+                await sendTextWithLinkPreview(sock, chatId, text, item.url);
+            }
+        } else {
+            const text = formatAiUpdateMessage(item, card);
+            await sendTextWithLinkPreview(sock, chatId, text, item.url);
+        }
 
         if (markPosted && this.aiUpdatesDatabase) {
             await this.aiUpdatesDatabase.markItemPosted(item.url, chatId);
@@ -84,7 +115,9 @@ class AiUpdatesController {
         let skipped = 0;
         for (const group of targetGroups) {
             try {
-                const sent = await this.sendItemMessage(sock, group.group_id, item);
+                const sent = await this.sendItemMessage(sock, group.group_id, item, {
+                    imageMode: group.news_img === true,
+                });
                 if (sent) {
                     posted++;
                     logger.info(`🤖 AI update posted to ${group.group_name || group.group_id}`);
@@ -160,9 +193,15 @@ class AiUpdatesController {
     async previewMixed(sock, chatId, limit = 5) {
         const items = await this.service.fetchMixedPool();
         const picked = items.slice(0, limit);
+        let imageMode = false;
+        try {
+            imageMode = await this.groupManager.isNewsImgEnabled(chatId);
+        } catch (err) {
+            logger.warn(`AI updates preview: news_img lookup failed: ${err.message}`);
+        }
         let sent = 0;
         for (const item of picked) {
-            const ok = await this.sendItemMessage(sock, chatId, item, { markPosted: false });
+            const ok = await this.sendItemMessage(sock, chatId, item, { markPosted: false, imageMode });
             if (ok) sent++;
         }
         return { sent, total: picked.length };

@@ -89,8 +89,14 @@ class InshortsScraper {
                 return;
             }
 
+            // Article photo — the card carries it as an ImageObject meta tag.
+            const imageUrl =
+                card.find('span[itemprop="image"] meta[itemprop="url"]').first().attr('content') ||
+                card.find('meta[itemprop="url"]').first().attr('content') ||
+                null;
+
             seenTitles.add(title.toLowerCase());
-            articles.push({ title, summary });
+            articles.push({ title, summary, imageUrl });
         });
 
         return articles;

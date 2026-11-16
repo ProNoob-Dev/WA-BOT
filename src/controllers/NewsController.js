@@ -5,9 +5,11 @@
 
 import { logger } from '../utils/logger.js';
 import { formatNewsArticleMessages } from '../utils/newsFormatter.js';
+import { downloadMediaBuffer } from '../utils/downloadMediaBuffer.js';
 import { botTelemetry } from '../utils/botTelemetry.js';
 
 const MESSAGE_DELAY_MS = 400;
+const IMAGE_DELAY_MS = 1500;
 
 function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -26,16 +28,27 @@ class NewsController {
         return this.scraper.getFreshArticlesForPosting(this.config.NEWS_MIN_ARTICLES);
     }
 
-    async sendArticleMessages(sock, chatId, articles, { markPosted = false } = {}) {
+    async sendArticleMessages(sock, chatId, articles, { markPosted = false, imageMode = false } = {}) {
         const messages = formatNewsArticleMessages(articles, this.config.NEWS_MIN_ARTICLES);
         if (!messages.length) {
             return 0;
         }
 
         for (let i = 0; i < messages.length; i++) {
-            await sock.sendMessage(chatId, { text: messages[i] });
+            const delayMs = imageMode ? IMAGE_DELAY_MS : MESSAGE_DELAY_MS;
+            if (imageMode && articles[i]?.imageUrl) {
+                try {
+                    const buffer = await downloadMediaBuffer(articles[i].imageUrl);
+                    await sock.sendMessage(chatId, { image: buffer, caption: messages[i] });
+                } catch (err) {
+                    logger.warn(`Tech news image failed for "${articles[i].title}": ${err.message} — sending text`);
+                    await sock.sendMessage(chatId, { text: messages[i] });
+                }
+            } else {
+                await sock.sendMessage(chatId, { text: messages[i] });
+            }
             if (i < messages.length - 1) {
-                await delay(MESSAGE_DELAY_MS);
+                await delay(delayMs);
             }
         }
 
@@ -49,7 +62,7 @@ class NewsController {
         return messages.length;
     }
 
-    async postNewsToGroup(sock, articles, groupId) {
+    async postNewsToGroup(sock, articles, groupId, imageMode = false) {
         const unposted = [];
         for (const article of articles) {
             if (!(await this.newsDatabase.isNewsPosted(article.title, groupId))) {
@@ -62,7 +75,7 @@ class NewsController {
         }
 
         try {
-            await this.sendArticleMessages(sock, groupId, unposted, { markPosted: true });
+            await this.sendArticleMessages(sock, groupId, unposted, { markPosted: true, imageMode });
             botTelemetry.track('post', {
                 kind: 'news',
                 title: String(unposted[0]?.title || 'news').slice(0, 100),
@@ -98,7 +111,7 @@ class NewsController {
 
         const results = await Promise.all(
             activeGroups.map(async (group) => {
-                const ok = await this.postNewsToGroup(sock, articles, group.group_id);
+                const ok = await this.postNewsToGroup(sock, articles, group.group_id, group.news_img === true);
                 if (ok) {
                     logger.info(`Tech news posted to ${group.group_name}`);
                 } else {
