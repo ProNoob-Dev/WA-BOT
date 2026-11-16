@@ -70,6 +70,11 @@ export const config = {
     MOVIE_HD_BYPASS_MAX_LINKS: Math.max(1, parseInt(process.env.MOVIE_HD_BYPASS_MAX_LINKS, 10) || 10),
     MOVIE_BYPASS_MAX_CONCURRENT: Math.max(1, parseInt(process.env.MOVIE_BYPASS_MAX_CONCURRENT, 10) || 6),
     MOVIE_BYPASS_MAX_LINKS: Math.max(1, parseInt(process.env.MOVIE_BYPASS_MAX_LINKS, 10) || 5),
+    /** Outbound proxy for gdflix bypass fetches ONLY (e.g. http://user:pass@host:port).
+     * Datacenter egress IPs (Koyeb/Render) are Cloudflare-challenged by gdflix;
+     * without a non-datacenter proxy the bypass cannot complete from those hosts.
+     * Empty = direct, exactly as before. */
+    PROXY_URL: process.env.PROXY_URL?.trim() || '',
     /** Movie search — Drive/AtoZ timeout (ms). */
     MOVIE_SECONDARY_TIMEOUT_MS: Math.max(4_000, parseInt(process.env.MOVIE_SECONDARY_TIMEOUT_MS, 10) || 8_000),
     /** Movie search — max ms to shorten links before sending results. */

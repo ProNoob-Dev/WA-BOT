@@ -6,7 +6,7 @@
  *   - hubcloud.<tld>/drive/ID → a#download → gamerxyt.com/hubcloud.php → final servers
  *   - hubdrive.<tld>/file/ID → hubcloud /drive page (same as above)
  *   - nexdrive.you/genxfmID → ad-lockered — best-effort only
- *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com, plus the page's mirrors (Telegram / MGT Server / GoFile / DriveBot). When the direct fetch is CF-blocked on a datacenter IP, the known mirror host (new<N>.gdflix.io) is tried directly, then the same link gets cache-bust retries plus a reader-proxy fallback (jina raw HTML carries the key; urltomarkdown on the final host recovers title/size). Mirrors from a reader page are returned even when the POST can't complete, with a note that the Drive link is unavailable.
+ *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com, plus the page's mirrors (Telegram / MGT Server / GoFile / DriveBot). When the direct fetch is CF-blocked on a datacenter IP, the known mirror host (new<N>.gdflix.io) is tried directly, then the same link gets cache-bust retries plus a reader-proxy fallback (jina raw HTML carries the key; urltomarkdown on the final host recovers title/size). Mirrors from a reader page are returned even when the POST can't complete, with a note that the Drive link is unavailable. When PROXY_URL is set, every gdflix fetch (direct, mirror, POST, readers) goes through that proxy instead of the datacenter egress.
  *
  * Final servers surfaced: R2 cloudflarestorage (presigned + r2.dev), 10Gbps,
  * FSLv2, FuckingFast, PixelDrain (/bypass command only). Telegram mirrors skipped.
@@ -21,6 +21,7 @@
 
 import axios from 'axios';
 import https from 'https';
+import { ProxyAgent } from 'proxy-agent';
 import { logger } from '../utils/logger.js';
 import { config } from '../config/config.js';
 
@@ -109,6 +110,64 @@ let _relaxedAgent = null;
 function relaxedHttpsAgent() {
     if (!_relaxedAgent) _relaxedAgent = new https.Agent({ rejectUnauthorized: false });
     return _relaxedAgent;
+}
+
+/** Outbound proxy for gdflix fetches ONLY (PROXY_URL env, e.g. http://user:pass@host:port).
+ * Datacenter egress (Koyeb/Render) is Cloudflare-challenged by gdflix on both
+ * the entry and mirror hosts, so without a non-datacenter proxy the bypass
+ * cannot complete from those hosts. The URL — and any credentials in it — are
+ * never logged. When unset/empty, every fetch below is exactly as before. */
+let _gdflixProxyAgent = null;
+let _gdflixProxyState = 'unchecked'; // 'unchecked' | 'on' | 'off' | 'bad'
+function gdflixProxyAgent() {
+    if (_gdflixProxyState !== 'unchecked') return _gdflixProxyState === 'on' ? _gdflixProxyAgent : null;
+    const raw = (config.PROXY_URL || '').trim();
+    if (!raw) { _gdflixProxyState = 'off'; return null; }
+    try {
+        const u = new URL(raw);
+        if (!/^https?:$/.test(u.protocol) || !u.hostname) throw new Error('proxy URL needs http(s)://host');
+        // ProxyAgent takes options, NOT a URL string: `new ProxyAgent(url)`
+        // silently ignores the URL and falls back to the host's env proxy
+        // (proxy-from-env) — so pin it with getProxyForUrl instead.
+        _gdflixProxyAgent = new ProxyAgent({ getProxyForUrl: () => raw });
+        _gdflixProxyState = 'on';
+        return _gdflixProxyAgent;
+    } catch {
+        _gdflixProxyState = 'bad';
+        logger.warn('[HdHubBypass] PROXY_URL is set but malformed — gdflix fetches will go direct');
+        return null;
+    }
+}
+
+/** axios options routing one gdflix request through the proxy ({} when unset).
+ * Logs once per proxied request so the Render/Koyeb logs show the proxy is
+ * actually engaged — the line never includes the proxy URL or credentials.
+ * `proxy: false` is required, not belt-and-braces: axios (1.15+ and 1.21)
+ * applies its own env-proxy handling when `proxy` is unset and silently
+ * discards a user-supplied httpsAgent — without it the request would go via
+ * the host's env proxy (or direct), never through PROXY_URL. */
+function gdflixProxyOpts() {
+    const agent = gdflixProxyAgent();
+    if (!agent) return {};
+    logger.info('[HdHubBypass] gdflix using proxy egress');
+    return { httpAgent: agent, httpsAgent: agent, proxy: false };
+}
+
+/** GET a reader URL through the proxy with the same minimal header set native
+ * fetch sends (axios's defaults would change jina's cache key and pin a stale
+ * challenge page). Only used when PROXY_URL is set; the fetch path is untouched.
+ * (Native fetch takes no proxy agent — undici isn't a dependency — so the
+ * proxied reader calls use axios with fetch's header set instead.) */
+async function fetchViaProxy(urlStr, headers, timeoutMs) {
+    const res = await axios.get(urlStr, {
+        timeout: timeoutMs,
+        maxContentLength: 3 * 1024 * 1024,
+        headers,
+        validateStatus: () => true,
+        responseType: 'text',
+        ...gdflixProxyOpts(),
+    });
+    return typeof res.data === 'string' ? res.data : String(res.data || '');
 }
 
 const TLS_CERT_ERR = /unable to verify|self.signed|cert(ificate)? (has expired|chain)|depth_zero|err_tls/i;
@@ -477,19 +536,30 @@ async function fetchViaJina(urlStr, timeoutMs) {
  * never as a failure. */
 async function fetchJinaHtml(urlStr, timeoutMs) {
     for (let attempt = 0; attempt < 2; attempt++) {
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), Math.max(6_000, timeoutMs));
+        const effTimeout = Math.max(6_000, timeoutMs);
         let text = '';
-        try {
-            const res = await fetch(`https://r.jina.ai/${urlStr}`, {
-                headers: { 'User-Agent': UA, 'X-Return-Format': 'html' },
-                signal: ctrl.signal,
-            });
-            text = await res.text();
-        } catch {
-            text = '';
-        } finally {
-            clearTimeout(t);
+        if (gdflixProxyAgent()) {
+            // Proxied: axios + proxy-agent with fetch's minimal header set.
+            try {
+                text = await fetchViaProxy(`https://r.jina.ai/${urlStr}`,
+                    { 'User-Agent': UA, 'X-Return-Format': 'html', 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br' }, effTimeout);
+            } catch {
+                text = '';
+            }
+        } else {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), effTimeout);
+            try {
+                const res = await fetch(`https://r.jina.ai/${urlStr}`, {
+                    headers: { 'User-Agent': UA, 'X-Return-Format': 'html' },
+                    signal: ctrl.signal,
+                });
+                text = await res.text();
+            } catch {
+                text = '';
+            } finally {
+                clearTimeout(t);
+            }
         }
         if (!/just a moment|challenge-platform/i.test(text) || attempt === 1) return text;
         await new Promise((r) => setTimeout(r, 900));
@@ -498,10 +568,19 @@ async function fetchJinaHtml(urlStr, timeoutMs) {
 }
 
 /** urltomarkdown.herokuapp.com renders a page to markdown — second reader
- * option that currently clears hubdrive.pics's Cloudflare when jina can't. */
-async function fetchViaUrltomarkdown(urlStr, timeoutMs) {
+ * option that currently clears hubdrive.pics's Cloudflare when jina can't.
+ * `useProxy` is gdflix-only (resolveGdflixViaProxy): the hubdrive/hubcloud
+ * reader path must not change egress. */
+async function fetchViaUrltomarkdown(urlStr, timeoutMs, useProxy = false) {
+    const effTimeout = Math.max(8_000, timeoutMs);
+    if (useProxy && gdflixProxyAgent()) {
+        // Proxied: axios + proxy-agent with fetch's minimal header set.
+        // Throws on transport failure, same as the fetch path below.
+        return fetchViaProxy(`https://urltomarkdown.herokuapp.com/?url=${encodeURIComponent(urlStr)}`,
+            { 'User-Agent': UA, 'Accept': '*/*', 'Accept-Encoding': 'gzip, deflate, br' }, effTimeout);
+    }
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), Math.max(8_000, timeoutMs));
+    const t = setTimeout(() => ctrl.abort(), effTimeout);
     try {
         const res = await fetch(`https://urltomarkdown.herokuapp.com/?url=${encodeURIComponent(urlStr)}`, {
             headers: { 'User-Agent': UA },
@@ -651,6 +730,7 @@ export async function gdflixPost(html, postUrl, timeoutMs) {
             maxContentLength: 3 * 1024 * 1024,
             headers: { ...DEFAULT_HEADERS, Referer: target, 'x-token': hostOf(target) },
             validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
+            ...gdflixProxyOpts(),
         });
     };
     try {
@@ -681,6 +761,7 @@ async function getGdflixPage(u, timeoutMs) {
             maxContentLength: 3 * 1024 * 1024,
             headers: DEFAULT_HEADERS,
             validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
+            ...gdflixProxyOpts(),
         });
         return {
             html: typeof res.data === 'string' ? res.data : String(res.data || ''),
@@ -754,6 +835,7 @@ export async function resolveGdflixViaProxy(urlStr, timeoutMs) {
             maxRedirects: 0,
             headers: DEFAULT_HEADERS,
             validateStatus: () => true,
+            ...gdflixProxyOpts(),
         });
         if (r.status >= 300 && r.status < 400 && typeof r.headers?.location === 'string') {
             finalUrl = new URL(r.headers.location, urlStr).href;
@@ -781,7 +863,7 @@ export async function resolveGdflixViaProxy(urlStr, timeoutMs) {
     const mdUrl = finalUrl || gdflixMirrorUrl(urlStr);
     if (mdUrl) {
         try {
-            const md = await fetchViaUrltomarkdown(mdUrl, proxyTimeout);
+            const md = await fetchViaUrltomarkdown(mdUrl, proxyTimeout, true);
             const title = gdflixTitleFromText(md);
             const size = gdflixSizeFromHtml(md);
             if (title || size) return { title, size, links: [] };
