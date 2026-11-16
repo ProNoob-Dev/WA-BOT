@@ -6,7 +6,7 @@
  *   - hubcloud.<tld>/drive/ID → a#download → gamerxyt.com/hubcloud.php → final servers
  *   - hubdrive.<tld>/file/ID → hubcloud /drive page (same as above)
  *   - nexdrive.you/genxfmID → ad-lockered — best-effort only
- *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com, plus the page's mirrors (Telegram / MGT Server / GoFile / DriveBot)
+ *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com, plus the page's mirrors (Telegram / MGT Server / GoFile / DriveBot). When the direct fetch is CF-blocked on a datacenter IP, the same link gets cache-bust retries plus a reader-proxy fallback (jina raw HTML carries the key; urltomarkdown on the final host recovers title/size).
  *
  * Final servers surfaced: R2 cloudflarestorage (presigned + r2.dev), 10Gbps,
  * FSLv2, FuckingFast, PixelDrain (/bypass command only). Telegram mirrors skipped.
@@ -470,6 +470,33 @@ async function fetchViaJina(urlStr, timeoutMs) {
     return '';
 }
 
+/** Same reader as fetchViaJina, but ask for the RAW HTML: the gdflix Direct
+ * Download key lives in inline JS, which markdown rendering strips. (The
+ * Udemy import already uses X-Return-Format: html for full course HTML.)
+ * Returns '' when jina is down/blocked — the caller treats that as "no key",
+ * never as a failure. */
+async function fetchJinaHtml(urlStr, timeoutMs) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), Math.max(6_000, timeoutMs));
+        let text = '';
+        try {
+            const res = await fetch(`https://r.jina.ai/${urlStr}`, {
+                headers: { 'User-Agent': UA, 'X-Return-Format': 'html' },
+                signal: ctrl.signal,
+            });
+            text = await res.text();
+        } catch {
+            text = '';
+        } finally {
+            clearTimeout(t);
+        }
+        if (!/just a moment|challenge-platform/i.test(text) || attempt === 1) return text;
+        await new Promise((r) => setTimeout(r, 900));
+    }
+    return '';
+}
+
 /** urltomarkdown.herokuapp.com renders a page to markdown — second reader
  * option that currently clears hubdrive.pics's Cloudflare when jina can't. */
 async function fetchViaUrltomarkdown(urlStr, timeoutMs) {
@@ -541,21 +568,85 @@ async function bypassNexdrive(urlStr, timeoutMs) {
     return extractServerLinks(html);
 }
 
+/** True when the body is a Cloudflare challenge / block page rather than the
+ * real file page. Matched on the page TITLE only: the "challenge-platform"
+ * script URL ships on every Cloudflare-proxied page (including the real
+ * one), so it must NOT be used on raw HTML. */
+function isCfChallengePage(html) {
+    return /<title[^>]*>\s*(just a moment|attention required)/i.test(String(html || ''));
+}
+
+/** GDFlix title from HTML (<title>) or reader markdown ("Name : …"). The
+ * "GDFlix | " prefix is stripped and the full filename kept (up to 160 chars). */
+export function gdflixTitleFromText(text) {
+    const raw = (String(text || '').match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]
+        || String(text || '').match(/Name\s*:\s*(.+)/i)?.[1] || '').trim();
+    return raw.replace(/^GDFlix\s*\|\s*/i, '').slice(0, 160);
+}
+
 /** GDFlix /file/ HTML → "964.09MB" from the `Size : …` list item (or ''). */
 function gdflixSizeFromHtml(html) {
     return html.match(/Size\s*:\s*([\d.]+\s*(?:KB|MB|GB))/i)?.[1] || '';
 }
 
+/** gdflix /file/ page HTML → direct Google Drive link via its own "Direct
+ * Download" POST. The page embeds a key (and a Turnstile token the widget
+ * fills in browsers); POSTing action=direct with the key returns
+ * { url: "https://drive.google.com/open?id=…" }. The server answers even
+ * with an empty token (verified live), so the token is sent when present but
+ * never gates the attempt. action=original needs a logged-in session, so it
+ * is never attempted. Returns '' when there is no key or no drive URL.
+ * The POST target may 302 (gdflix.dev → current mirror host); axios would
+ * turn a redirected POST into a GET, so the redirect is followed manually. */
+export async function gdflixPost(html, postUrl, timeoutMs) {
+    // The page leaves cf_token empty until the Turnstile widget fills it in a
+    // browser — but the server answers action=direct even with an empty
+    // token (verified live), so the key alone gates the POST.
+    const token = html.match(/var cf_token\s*=\s*"([^"]*)"/)?.[1] || '';
+    const key = html.match(/formData\.append\("key",\s*"([^"]+)"\)/)?.[1] || '';
+    if (!key) {
+        logger.warn('[HdHubBypass] gdflix no direct key in page — changed markup or challenge page');
+        return '';
+    }
+    const postOnce = async (target) => {
+        const form = new FormData();
+        form.append('action', 'direct');
+        form.append('key', key);
+        form.append('action_token', token);
+        return axios.post(target, form, {
+            timeout: timeoutMs,
+            maxRedirects: 0,
+            maxContentLength: 3 * 1024 * 1024,
+            headers: { ...DEFAULT_HEADERS, Referer: target, 'x-token': hostOf(target) },
+            validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
+        });
+    };
+    try {
+        let res = await postOnce(postUrl);
+        if (res.status >= 300 && res.status < 400 && typeof res.headers?.location === 'string') {
+            res = await postOnce(new URL(res.headers.location, postUrl).href);
+        }
+        const data = (res.data && typeof res.data === 'object') ? res.data : {};
+        const direct = !data.error && typeof (data.url || data.visit_url) === 'string'
+            ? (data.url || data.visit_url) : '';
+        if (!/^https?:\/\//i.test(direct)) {
+            logger.warn(`[HdHubBypass] gdflix direct POST yielded no drive URL (error=${data.error || 'none'})`);
+            return '';
+        }
+        return direct;
+    } catch (err) {
+        logger.warn(`[HdHubBypass] gdflix direct POST failed: ${err?.message || err}`);
+        return '';
+    }
+}
+
 /** gdflix /file/ page → direct Google Drive link via its own "Direct Download" POST.
- * The page embeds a key (and a Turnstile token the widget fills in browsers);
- * POSTing action=direct with the key returns { url: "https://drive.google.com/open?id=…" }.
- * The server answers even with an empty token (verified live), so the token
- * is sent when present but never gates the attempt. action=original needs a
- * logged-in session, so it is never attempted. The page's mirrors are returned
- * alongside the Drive link; when the POST yields nothing, the mirrors alone are the fallback. */
+ * The page's mirrors are returned alongside the Drive link; when the POST
+ * yields nothing, the mirrors alone are the fallback. */
 async function bypassGdflix(urlStr, timeoutMs) {
     let html = '';
     let finalUrl = urlStr;
+    let status = 0;
     try {
         const res = await axios.get(canonicalizeHost(urlStr), {
             timeout: timeoutMs,
@@ -566,40 +657,65 @@ async function bypassGdflix(urlStr, timeoutMs) {
         });
         html = typeof res.data === 'string' ? res.data : String(res.data || '');
         finalUrl = finalUrlOf(res, urlStr);
+        status = res.status;
     } catch (err) {
         logger.warn(`[HdHubBypass] gdflix page fetch failed: ${err?.message || err}`);
         return [];
     }
-    // The page leaves cf_token empty until the Turnstile widget fills it in a
-    // browser — but the server answers action=direct even with an empty
-    // token (verified live), so the key alone gates the POST.
-    const token = html.match(/var cf_token\s*=\s*"([^"]*)"/)?.[1] || '';
-    const key = html.match(/formData\.append\("key",\s*"([^"]+)"\)/)?.[1] || '';
-    if (key) {
-        try {
-            const form = new FormData();
-            form.append('action', 'direct');
-            form.append('key', key);
-            form.append('action_token', token);
-            const res = await axios.post(finalUrl, form, {
-                timeout: timeoutMs,
-                maxRedirects: 5,
-                maxContentLength: 3 * 1024 * 1024,
-                headers: { ...DEFAULT_HEADERS, Referer: finalUrl, 'x-token': hostOf(finalUrl) },
-                validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
-            });
-            const data = (res.data && typeof res.data === 'object') ? res.data : {};
-            const direct = !data.error && typeof (data.url || data.visit_url) === 'string'
-                ? (data.url || data.visit_url) : '';
-            if (/^https?:\/\//i.test(direct)) {
-                // The POST yields the Drive link; the same page already lists the mirrors — return both.
-                return [...bypassGdflixFromHtml(html), { label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) }];
-            }
-        } catch (err) {
-            logger.warn(`[HdHubBypass] gdflix direct POST failed: ${err?.message || err}`);
-        }
+    // A Cloudflare challenge page carries no key and no mirrors — say so
+    // plainly instead of failing silently, so the host logs name the cause.
+    if (isCfChallengePage(html)) {
+        logger.warn(`[HdHubBypass] gdflix CF challenge page (HTTP ${status}) — direct POST impossible, reader fallback will try`);
+        return [];
+    }
+    const direct = await gdflixPost(html, finalUrl, timeoutMs);
+    if (/^https?:\/\//i.test(direct)) {
+        // The POST yields the Drive link; the same page already lists the mirrors — return both.
+        return [...bypassGdflixFromHtml(html), { label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) }];
     }
     return bypassGdflixFromHtml(html);
+}
+
+/** gdflix fallback for a CF-blocked / dead direct fetch: recover what the
+ * reader proxies can still see. jina raw HTML is the only reader that can
+ * carry the page-embedded key, so it is the only route back to the Drive
+ * link; urltomarkdown on the final host recovers title + size only (mirrors
+ * and the key don't survive markdown). Returns whatever was found — links
+ * may still be empty when every reader is blocked, and the caller logs that. */
+export async function resolveGdflixViaProxy(urlStr, timeoutMs) {
+    const proxyTimeout = Math.min(timeoutMs, 7_000);
+    // Learn the redirect target (gdflix.dev 302s to the current mirror host);
+    // urltomarkdown can't follow that 302, and the POST must go there.
+    let finalUrl = '';
+    try {
+        const r = await axios.get(canonicalizeHost(urlStr), {
+            timeout: proxyTimeout,
+            maxRedirects: 0,
+            headers: DEFAULT_HEADERS,
+            validateStatus: () => true,
+        });
+        if (r.status >= 300 && r.status < 400 && typeof r.headers?.location === 'string') {
+            finalUrl = new URL(r.headers.location, urlStr).href;
+        }
+    } catch {}
+    const jinaHtml = await fetchJinaHtml(finalUrl || urlStr, proxyTimeout);
+    if (jinaHtml && /formData\.append\("key"/.test(jinaHtml)) {
+        const direct = await gdflixPost(jinaHtml, finalUrl || urlStr, proxyTimeout);
+        const links = [...bypassGdflixFromHtml(jinaHtml)];
+        if (direct) links.push({ label: 'Download', serverKey: 'gdrive', url: sanitizeUrl(direct) });
+        if (links.length) {
+            return { title: gdflixTitleFromText(jinaHtml), size: gdflixSizeFromHtml(jinaHtml), links };
+        }
+    }
+    if (finalUrl) {
+        try {
+            const md = await fetchViaUrltomarkdown(finalUrl, proxyTimeout);
+            const title = gdflixTitleFromText(md);
+            const size = gdflixSizeFromHtml(md);
+            if (title || size) return { title, size, links: [] };
+        } catch {}
+    }
+    return { title: '', size: '', links: [] };
 }
 
 /** Build a per-link timeout from the global budget. */
@@ -620,8 +736,16 @@ function cacheBust(urlStr) {
 }
 
 /** True when the page family is worth one retry on an empty extraction
- * (hubcloud/hubdrive edges intermittently serve rate-limit/WAF junk pages). */
-const RETRY_ON_EMPTY_RE = /hubdrive\.|hubcloud\./i;
+ * (hubcloud/hubdrive/gdflix edges intermittently serve rate-limit/WAF junk
+ * pages). gdflix was missing here, so a blocked GET meant an instant
+ * BYPASS FAILED with no retry and no fallback at all. */
+const RETRY_ON_EMPTY_RE = /hubdrive\.|hubcloud\.|gdflix\./i;
+
+/** Families the generic jina-chain fallback can help: hubdrive/hubcloud hop
+ * through hubcloud.php, whose servers it classifies. gdflix is excluded —
+ * resolveViaJina can't classify gdflix mirrors, and gdflix has its own
+ * reader fallback in resolveForUser below. */
+const JINA_FALLBACK_RE = /hubdrive\.|hubcloud\./i;
 
 /** True when the URL host is one of the bypassable file-page families. */
 export function isBypassableUrl(urlStr) {
@@ -753,14 +877,19 @@ async function resolveForUser(urlStr, host, timeoutMs) {
         html = await fetchPage(urlStr, { timeoutMs });
     } catch (err) {
         logger.warn(`[HdHubBypass] ${host} page fetch failed: ${err?.message || err}`);
-        return { title: '', size: '', links: [] };
+        // gdflix: the direct fetch may be CF-blocked while the reader proxies
+        // still work — fall through to the proxy fallback below instead of
+        // returning empty. Every other family keeps the early return.
+        if (!/gdflix\./i.test(host)) return { title: '', size: '', links: [] };
     }
-    const rawTitle = (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
+    // A challenge page has no real title/size (its <title> is "Just a moment…").
+    const challenged = isCfChallengePage(html);
+    const rawTitle = challenged ? '' : (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim();
     // GDFlix titles carry a "GDFlix | " prefix; strip it and keep the full filename (up to 160 chars).
-    const title = /gdflix\./i.test(host)
+    let title = /gdflix\./i.test(host)
         ? rawTitle.replace(/^GDFlix\s*\|\s*/i, '').slice(0, 160)
         : rawTitle.slice(0, 90);
-    const size = /gdflix\./i.test(host) ? gdflixSizeFromHtml(html) : '';
+    let size = /gdflix\./i.test(host) && !challenged ? gdflixSizeFromHtml(html) : '';
     const extract = (h) => {
         if (/gdflix\./i.test(host)) return bypassGdflix(urlStr, timeoutMs);
         if (/hubcdn\./i.test(host)) return bypassHubcdnFromHtml(h);
@@ -770,7 +899,7 @@ async function resolveForUser(urlStr, host, timeoutMs) {
     let links = [];
     try {
         links = await extract(html);
-        // Up to 2 backoff + cache-bust retries when a hubdrive/hubcloud page
+        // Up to 2 backoff + cache-bust retries when a hubdrive/hubcloud/gdflix page
         // yields nothing — recovers transient rate-limit/WAF/cache-junk and
         // short network-filter blocks on the hubcloud hop.
         for (const waitMs of [900, 1800]) {
@@ -782,7 +911,7 @@ async function resolveForUser(urlStr, host, timeoutMs) {
         }
         // Final fallback: render the chain through the jina proxy (Cloudflare
         // challenges / datacenter-IP blocks defeat direct fetches).
-        if (!links.length && RETRY_ON_EMPTY_RE.test(host)) {
+        if (!links.length && JINA_FALLBACK_RE.test(host)) {
             // Hybrid (hubdrive-family): hubdrive.pics CF-challenges datacenter
             // IPs, but the hubcloud hop is reachable — render ONLY the hubdrive
             // page via jina, then fetch the hubcloud chain directly.
@@ -815,6 +944,27 @@ async function resolveForUser(urlStr, host, timeoutMs) {
     } catch (err) {
         logger.warn(`[HdHubBypass] ${host} extract failed: ${err?.message || err}`);
         links = [];
+    }
+    // gdflix reader fallback (runs even if the retry loop threw): the direct
+    // fetch is the part Cloudflare blocks on datacenter IPs, and until now
+    // gdflix had no fallback at all — a blocked GET meant an instant
+    // BYPASS FAILED with no retry and no diagnosis.
+    if (!links.length && /gdflix\./i.test(host)) {
+        try {
+            const via = await resolveGdflixViaProxy(urlStr, timeoutMs);
+            if (via.links.length) {
+                links = via.links;
+                logger.info(`[HdHubBypass] gdflix resolved via reader fallback (${via.links.length} links)`);
+            } else if (via.title || via.size) {
+                logger.warn(`[HdHubBypass] gdflix reader fallback found the file but no download links (title=${via.title ? 'yes' : 'no'}, size=${via.size || '?'}) — readers are blocked too`);
+            } else {
+                logger.warn('[HdHubBypass] gdflix reader fallback recovered nothing (jina + urltomarkdown both empty/blocked)');
+            }
+            if (!title) title = via.title;
+            if (!size) size = via.size;
+        } catch (e) {
+            logger.warn(`[HdHubBypass] gdflix reader fallback failed: ${e?.message || e}`);
+        }
     }
     return { title, size, links: dedupeLinks(links) };
 }

@@ -17,6 +17,8 @@ import { bypassSingleLink } from '../src/services/HdHubBypassService.js';
 
 const url = process.argv[2] || 'https://gdflix.dev/file/qKcy0ZhknWkzFfu';
 const isDefault = url === 'https://gdflix.dev/file/qKcy0ZhknWkzFfu';
+const SECOND = 'https://gdflix.dev/file/EI5xgZbN4Fqpi2s';
+const isSecond = url === SECOND;
 
 (async () => {
     try {
@@ -39,6 +41,17 @@ const isDefault = url === 'https://gdflix.dev/file/qKcy0ZhknWkzFfu';
                 else if (!/^https:\/\//.test(got.url) || /&amp;/.test(got.url)) fail(`${want} URL is not a clean https link: ${got.url}`);
             }
         }
+        if (isSecond) {
+            // S01E18 720p: 4 links, no GoFile mirror exists for this file — do not invent one.
+            if (!title.includes('Family.Full.House')) fail('expected the file title');
+            if (size !== '608.02MB') fail(`expected size 608.02MB, got ${size || '(none)'}`);
+            for (const want of ['DriveBot', 'Telegram', 'MGT Server', 'Download']) {
+                const got = links.find((l) => l.label === want);
+                if (!got) fail(`missing ${want} mirror`);
+                else if (!/^https:\/\//.test(got.url) || /&amp;/.test(got.url)) fail(`${want} URL is not a clean https link: ${got.url}`);
+            }
+            if (links.find((l) => l.label === 'GoFile')) fail('GoFile mirror should not exist for this file');
+        }
         const direct = links.find((l) => /^https:\/\/(drive|docs)\.google\.com\//i.test(l.url));
         if (!direct) {
             fail('expected a drive.google.com direct link');
@@ -50,3 +63,4 @@ const isDefault = url === 'https://gdflix.dev/file/qKcy0ZhknWkzFfu';
         process.exitCode = 1;
     }
 })();
+
