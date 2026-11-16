@@ -298,6 +298,20 @@ export const COMMAND_REGISTRY = [
         help: 'Disable AI updates in this group',
     },
     {
+        names: ['/newsimgon'],
+        key: 'newsimgon',
+        scope: 'group_only',
+        role: 'staff',
+        help: 'Post TECH FLASH and AI updates with the article photo in this group',
+    },
+    {
+        names: ['/newsimgoff'],
+        key: 'newsimgoff',
+        scope: 'group_only',
+        role: 'staff',
+        help: 'Post TECH FLASH and AI updates as text only in this group',
+    },
+    {
         names: ['/interviewq'],
         key: 'interviewq',
         scope: 'any',
@@ -978,6 +992,7 @@ export const HELP_CATEGORY = {
     activate: 'group', deactivate: 'group', newson: 'group', newsoff: 'group',
     courson: 'group', coursesoff: 'group', githubon: 'group', githuboff: 'group',
     awesomeon: 'group', awesomeoff: 'group', aiupdateson: 'group', aiupdatesoff: 'group',
+    newsimgon: 'group', newsimgoff: 'group',
     instaon: 'group', instaoff: 'group',
     bypasson: 'group', bypassoff: 'group',
     stickeron: 'group', stickeroff: 'group', movieon: 'group', movieoff: 'group',
