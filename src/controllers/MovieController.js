@@ -13,6 +13,7 @@ import { config } from '../config/config.js';
 import { atozService } from '../services/AtoZService.js';
 import { hdHubMoviesService } from '../services/HdHubMoviesService.js';
 import { mkvbaseService } from '../services/MkvbaseService.js';
+import { mkvbaseSiteService } from '../services/MkvbaseSiteService.js';
 import { enrichResultsWithDirectLinks } from '../services/HdHubBypassService.js';
 import { pronoobDriveService } from '../services/PronoobDriveService.js';
 import { movieCacheService, cloneMovieResults } from '../services/MovieCacheService.js';
@@ -373,6 +374,10 @@ function formatMovieSearchProgress(dialogue, query, state) {
     if (state.atoz !== undefined) {
         const detail = state.atozCount != null ? `${state.atozCount} found` : '';
         msg += `${formatSourceLine('📺', 'AtoZ cinema', state.atoz, detail)}\n`;
+    }
+    if (state.site !== undefined) {
+        const detail = state.siteCount != null ? `${state.siteCount} found` : '';
+        msg += `${formatSourceLine('🌐', 'Mkvbase site', state.site, detail)}\n`;
     }
     if (state.shorten === 'loading') {
         msg += '> 🔗 Shortening links…\n';
@@ -789,6 +794,7 @@ class MovieController {
         atozService.startKeepAlive();
         hdHubMoviesService.startKeepAlive();
         mkvbaseService.startKeepAlive();
+        mkvbaseSiteService.startKeepAlive();
     }
 
     stopKeepAlive() {
@@ -796,6 +802,7 @@ class MovieController {
         atozService.stopKeepAlive();
         hdHubMoviesService.stopKeepAlive();
         mkvbaseService.stopKeepAlive();
+        mkvbaseSiteService.stopKeepAlive();
     }
 
     async logSearch(userId, query, resultCount, chatId) {
@@ -1300,7 +1307,7 @@ class MovieController {
         const enrichGraceMs = 2_000;
 
         progress?.startPulse?.();
-        await progress?.update?.({ percent: 15, vault: 'loading', hd: 'pending', drive: 'pending', atoz: 'pending' }, { force: true });
+        await progress?.update?.({ percent: 15, vault: 'loading', hd: 'pending', drive: 'pending', atoz: 'pending', site: 'pending' }, { force: true });
 
         // Our own Mkvbase vault API first — pinned above scraped sources in results.
         const vaultTimeout = config.MKVBASE_TIMEOUT_MS || 6_000;
@@ -1339,6 +1346,14 @@ class MovieController {
             'atoz timeout',
         ).catch(() => []);
 
+        // Direct mkvbase.site search (signed /api/links API) — additional source
+        // alongside the vault API; fail-soft, returns [] when Cloudflare blocks.
+        const sitePromise = this._withTimeout(
+            mkvbaseSiteService.searchMovies(query, 5),
+            secTimeout,
+            'mkvbase site timeout',
+        ).catch(() => []);
+
         const hdResults = await hdPromise;
         const vaultResults = await vaultPromise;
         progress?.stopPulse?.();
@@ -1350,25 +1365,29 @@ class MovieController {
             hdCount: hdResults.length,
             drive: 'loading',
             atoz: 'loading',
+            site: 'loading',
         });
 
         let driveResults = [];
         let atozResults = [];
+        let siteResults = [];
 
         // Movies API already includes AtoZ with NullDrop mirrors — skip local scrape then
         const hdHasAtoz = hdResults.some((r) => /^atoz$/i.test(String(r?.source || '').trim()));
 
         if (hdResults.length >= 3) {
-            [driveResults, atozResults] = await Promise.all([
+            [driveResults, atozResults, siteResults] = await Promise.all([
                 this._withTimeout(drivePromise, enrichGraceMs, 'drive grace').catch(() => []),
                 hdHasAtoz
                     ? Promise.resolve([])
                     : this._withTimeout(atozPromise, enrichGraceMs, 'atoz grace').catch(() => []),
+                this._withTimeout(sitePromise, enrichGraceMs, 'site grace').catch(() => []),
             ]);
         } else {
-            [driveResults, atozResults] = await Promise.all([
+            [driveResults, atozResults, siteResults] = await Promise.all([
                 drivePromise,
                 hdHasAtoz ? Promise.resolve([]) : atozPromise,
+                sitePromise,
             ]);
         }
 
@@ -1384,16 +1403,19 @@ class MovieController {
             driveCount: driveResults.length,
             atoz: 'done',
             atozCount: atozResults.length,
+            site: 'done',
+            siteCount: siteResults.length,
         });
 
-        return { vaultResults, hdResults, driveResults, atozResults };
+        return { vaultResults, hdResults, driveResults, atozResults, siteResults };
     }
 
     async _fetchMovieResultsFromApis(query) {
-        const { vaultResults, hdResults, driveResults, atozResults } = await this._searchMovieSources(query, null);
+        const { vaultResults, hdResults, driveResults, atozResults, siteResults } = await this._searchMovieSources(query, null);
 
         let results = [];
         if (hdResults.length > 0) results.push(...hdResults);
+        if (siteResults.length > 0) results.push(...siteResults);
         if (driveResults.length > 0) results.push(...driveResults);
         if (atozResults.length > 0) results.push(...atozResults);
 
@@ -1402,7 +1424,7 @@ class MovieController {
         const seen = new Set(vaultResults.map((r) => cleanTitle(r.title).toLowerCase()));
         results = [...vaultResults, ...results.filter((r) => !seen.has(cleanTitle(r.title).toLowerCase()))];
         const sources = [...new Set(results.map((r) => r.source).filter(Boolean))];
-        return { results, sources, hdResults, driveResults, atozResults };
+        return { results, sources, hdResults, driveResults, atozResults, siteResults };
     }
 
     _backgroundRefreshVault(query) {
@@ -1514,10 +1536,11 @@ class MovieController {
                 hdResults: [],
                 driveResults: [],
                 atozResults: [],
+                siteResults: [],
             };
         }
 
-        const { results, sources, hdResults, driveResults, atozResults } =
+        const { results, sources, hdResults, driveResults, atozResults, siteResults } =
             await this._fetchMovieResultsFromApisWithProgress(query, progress);
 
         if (results.length > 0) {
@@ -1531,6 +1554,7 @@ class MovieController {
                 hdResults,
                 driveResults,
                 atozResults,
+                siteResults,
             };
         }
 
@@ -1543,14 +1567,16 @@ class MovieController {
             hdResults,
             driveResults,
             atozResults,
+            siteResults,
         };
     }
 
     async _fetchMovieResultsFromApisWithProgress(query, progress) {
-        const { vaultResults, hdResults, driveResults, atozResults } = await this._searchMovieSources(query, progress);
+        const { vaultResults, hdResults, driveResults, atozResults, siteResults } = await this._searchMovieSources(query, progress);
 
         let results = [];
         if (hdResults.length > 0) results.push(...hdResults);
+        if (siteResults.length > 0) results.push(...siteResults);
         if (driveResults.length > 0) results.push(...driveResults);
         if (atozResults.length > 0) results.push(...atozResults);
 
@@ -1559,7 +1585,7 @@ class MovieController {
         const seen = new Set(vaultResults.map((r) => cleanTitle(r.title).toLowerCase()));
         results = [...vaultResults, ...results.filter((r) => !seen.has(cleanTitle(r.title).toLowerCase()))];
         const sources = [...new Set(results.map((r) => r.source).filter(Boolean))];
-        return { results, sources, hdResults, driveResults, atozResults };
+        return { results, sources, hdResults, driveResults, atozResults, siteResults };
     }
 
     async handleMovieSearch(sock, chatId, senderJid, args, pushName = '', originalMsg = null) {
@@ -1589,6 +1615,7 @@ class MovieController {
             hd: 'loading',
             drive: 'pending',
             atoz: 'pending',
+            site: 'pending',
         });
         const searchingMsgPromise = movieQuickSend(sock, chatId, { text: initialProgress }, originalMsg);
 
@@ -1631,7 +1658,7 @@ class MovieController {
 
             const resolved = await this._resolveMovieResults(query, progress);
             let results = cloneMovieResults(resolved.results);
-            const { hdResults, driveResults, atozResults, servedFromCache, staleCache, fuzzyMatch } = resolved;
+            const { hdResults, driveResults, atozResults, siteResults, servedFromCache, staleCache, fuzzyMatch } = resolved;
 
             if (hdResults.length > 0) {
                 logger.info(`HDHub: ${hdResults.length} results for "${query}"`);
@@ -1645,6 +1672,10 @@ class MovieController {
 
             if (atozResults.length > 0) {
                 logger.info(`AtoZ: ${atozResults.length} results for "${query}"`);
+            }
+
+            if (siteResults.length > 0) {
+                logger.info(`Mkvbase site: ${siteResults.length} results for "${query}"`);
             }
 
             const sources = [...new Set(resolved.sources.filter(Boolean))];

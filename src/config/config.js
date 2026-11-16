@@ -75,6 +75,16 @@ export const config = {
      * without a non-datacenter proxy the bypass cannot complete from those hosts.
      * Empty = direct, exactly as before. */
     PROXY_URL: process.env.PROXY_URL?.trim() || '',
+    /** Mkvbase.site direct search — signed /api/links API timeout (ms). */
+    MKVBASE_SITE_TIMEOUT_MS: Math.max(4_000, parseInt(process.env.MKVBASE_SITE_TIMEOUT_MS, 10) || 15_000),
+    /** Mkvbase.site base URL (override for tests). */
+    MKVBASE_SITE_URL: process.env.MKVBASE_SITE_URL?.trim() || 'https://mkvbase.site',
+    /** Mkvbase.site owner skip-rule secret — sent as MKV_ORIGIN_HEADER on every
+     * request; Cloudflare skips the challenge for it. Empty = no header.
+     * Only needed if the bot's egress (direct or via PROXY_URL) is challenged. */
+    MKV_ORIGIN_KEY: process.env.MKV_ORIGIN_KEY?.trim() || '',
+    /** Header name for the mkvbase origin key (default X-Mkv-Key). */
+    MKV_ORIGIN_HEADER: (process.env.MKV_ORIGIN_HEADER || 'X-Mkv-Key').trim() || 'X-Mkv-Key',
     /** Movie search — Drive/AtoZ timeout (ms). */
     MOVIE_SECONDARY_TIMEOUT_MS: Math.max(4_000, parseInt(process.env.MOVIE_SECONDARY_TIMEOUT_MS, 10) || 8_000),
     /** Movie search — max ms to shorten links before sending results. */
