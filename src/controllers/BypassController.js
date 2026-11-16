@@ -133,7 +133,7 @@ function formatBypassFailed(urls, remaining, unlimited) {
     for (const u of urls.slice(0, 3)) msg += `> ${u.slice(0, 90)}\n`;
     if (urls.length > 3) msg += `> … +${urls.length - 3} more\n`;
     msg += '\nThe link(s) may be dead, password-protected, or not supported yet.\n';
-    msg += '_Supported: HDHub4u, HubCloud, HubDrive, HubCDN pages._\n\n';
+    msg += '_Supported: HDHub4u, HubCloud, HubDrive, HubCDN, GDFlix pages._\n\n';
     msg += '─────────────────────────────\n';
     if (unlimited) {
         msg += '⭐ _Unlimited bypasses (Premium/Staff)_';
@@ -141,17 +141,6 @@ function formatBypassFailed(urls, remaining, unlimited) {
         msg += `🔢 _Bypasses left today: *${remaining}* / ${BYPASS_DAILY_LIMIT}_\n`;
         msg += '⏰ _This message auto-deletes in 5 hours_';
     }
-    return msg;
-}
-
-function formatGdflixLimited(urls) {
-    let msg = '⛔ *GDFLIX NOT SUPPORTED*\n\n';
-    for (const u of urls.slice(0, 3)) msg += `> ${u.slice(0, 90)}\n`;
-    msg += '\nGDFlix pages are protected by Cloudflare Turnstile — the bot cannot solve it.\n';
-    msg += '_Only their Telegram mirror exists, which is excluded._\n\n';
-    msg += '💡 *Instead:* open the movie page on HDHub4u and send me its\n';
-    msg += 'HubCloud / HubDrive / HubCDN link — those bypass fully.\n';
-    msg += '─────────────────────────────';
     return msg;
 }
 
@@ -386,12 +375,9 @@ class BypassController {
                 // 2) resolve all links through the shared parallel pool
                 const resolved = await this._resolveWithSlot(urls, BYPASS_BUDGET_MS);
                 const ok = resolved.filter((r) => r.links.length > 0);
-                const gdflixTried = urls.filter((u) => /gdflix\./i.test(u));
 
                 if (!ok.length) {
-                    await editOrSend(gdflixTried.length && ok.length === 0
-                        ? formatGdflixLimited(gdflixTried)
-                        : formatBypassFailed(urls, Math.max(0, BYPASS_DAILY_LIMIT - used), unlimited));
+                    await editOrSend(formatBypassFailed(urls, Math.max(0, BYPASS_DAILY_LIMIT - used), unlimited));
                     logger.info(`Bypass failed for ${urls.length} link(s)`);
                     return;
                 }
@@ -452,7 +438,7 @@ class BypassController {
                     'Usage: `/bypass <link>` — or up to ' + BYPASS_MAX_LINKS + ' links at once:\n' +
                     '`/bypass <link1> <link2> <link3>`\n\n' +
                     '_Supported links:_\n' +
-                    '• HDHub4u / HubCloud / HubDrive / HubCDN\n\n' +
+                    '• HDHub4u / HubCloud / HubDrive / HubCDN / GDFlix\n\n' +
                     `_Free limit: ${BYPASS_DAILY_LIMIT} bypasses/day · admins & premium: unlimited_`,
             }, originalMsg);
             return;
@@ -462,7 +448,7 @@ class BypassController {
             await sendAndDelete(sock, chatId, {
                 text:
                     '⚠️ That link is not a supported bypass target.\n\n' +
-                    '_Supported: HDHub4u, HubCloud, HubDrive, HubCDN pages._',
+                    '_Supported: HDHub4u, HubCloud, HubDrive, HubCDN, GDFlix pages._',
             }, originalMsg);
             return;
         }
@@ -485,7 +471,7 @@ class BypassController {
                 '✅ *BYPASS AUTO ON* ✅\n' +
                 '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
                 `📢 *Group:* ${groupName}\n\n` +
-                '🔗 HDHub4u / HubCloud links pasted here are bypassed automatically.\n' +
+                '🔗 HDHub4u / HubCloud / GDFlix links pasted here are bypassed automatically.\n' +
                 '_No command needed — just send the link._\n\n' +
                 '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
                 '💡 Use `/bypassoff` to turn this off',
@@ -544,3 +530,4 @@ class BypassController {
 
 export const bypassController = new BypassController(null, null);
 export default BypassController;
+

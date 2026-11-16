@@ -6,7 +6,7 @@
  *   - hubcloud.<tld>/drive/ID → a#download → gamerxyt.com/hubcloud.php → final servers
  *   - hubdrive.<tld>/file/ID → hubcloud /drive page (same as above)
  *   - nexdrive.you/genxfmID → ad-lockered — best-effort only
- *   - gdflix.<tld>/file/ID  → pre-generated mirrors only (DDL is Turnstile-gated)
+ *   - gdflix.<tld>/file/ID  → "Direct Download" POST (page-embedded Turnstile token) → drive.google.com; mirrors as fallback
  *
  * Final servers surfaced: R2 cloudflarestorage (presigned + r2.dev), 10Gbps,
  * FSLv2, FuckingFast, PixelDrain (/bypass command only). Telegram mirrors skipped.
@@ -315,7 +315,7 @@ function gdflixMirrorLabel(urlStr) {
     return '';
 }
 
-/** GDFlix /file/ HTML → pre-generated mirror links (DDL itself is Turnstile-gated). */
+/** GDFlix /file/ HTML → pre-generated mirror links (fallback when the Direct Download POST yields nothing). */
 function bypassGdflixFromHtml(html) {
     const out = [];
     const seen = new Set();
@@ -539,6 +539,61 @@ async function bypassNexdrive(urlStr, timeoutMs) {
     return extractServerLinks(html);
 }
 
+/** gdflix /file/ page → direct Google Drive link via its own "Direct Download" POST.
+ * The page embeds a key (and a Turnstile token the widget fills in browsers);
+ * POSTing action=direct with the key returns { url: "https://drive.google.com/open?id=…" }.
+ * The server answers even with an empty token (verified live), so the token
+ * is sent when present but never gates the attempt. action=original needs a
+ * logged-in session, so it is never attempted. Falls back to the pre-generated
+ * mirrors when the POST yields nothing. */
+async function bypassGdflix(urlStr, timeoutMs) {
+    let html = '';
+    let finalUrl = urlStr;
+    try {
+        const res = await axios.get(canonicalizeHost(urlStr), {
+            timeout: timeoutMs,
+            maxRedirects: 5,
+            maxContentLength: 3 * 1024 * 1024,
+            headers: DEFAULT_HEADERS,
+            validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
+        });
+        html = typeof res.data === 'string' ? res.data : String(res.data || '');
+        finalUrl = finalUrlOf(res, urlStr);
+    } catch (err) {
+        logger.warn(`[HdHubBypass] gdflix page fetch failed: ${err?.message || err}`);
+        return [];
+    }
+    // The page leaves cf_token empty until the Turnstile widget fills it in a
+    // browser — but the server answers action=direct even with an empty
+    // token (verified live), so the key alone gates the POST.
+    const token = html.match(/var cf_token\s*=\s*"([^"]*)"/)?.[1] || '';
+    const key = html.match(/formData\.append\("key",\s*"([^"]+)"\)/)?.[1] || '';
+    if (key) {
+        try {
+            const form = new FormData();
+            form.append('action', 'direct');
+            form.append('key', key);
+            form.append('action_token', token);
+            const res = await axios.post(finalUrl, form, {
+                timeout: timeoutMs,
+                maxRedirects: 5,
+                maxContentLength: 3 * 1024 * 1024,
+                headers: { ...DEFAULT_HEADERS, Referer: finalUrl, 'x-token': hostOf(finalUrl) },
+                validateStatus: (s) => (s >= 200 && s < 400) || s === 403,
+            });
+            const data = (res.data && typeof res.data === 'object') ? res.data : {};
+            const direct = !data.error && typeof (data.url || data.visit_url) === 'string'
+                ? (data.url || data.visit_url) : '';
+            if (/^https?:\/\//i.test(direct)) {
+                return [{ label: 'Google Drive ⚡', serverKey: 'gdrive', url: sanitizeUrl(direct) }];
+            }
+        } catch (err) {
+            logger.warn(`[HdHubBypass] gdflix direct POST failed: ${err?.message || err}`);
+        }
+    }
+    return bypassGdflixFromHtml(html);
+}
+
 /** Build a per-link timeout from the global budget. */
 function perAttemptTimeout(budgetMs) {
     return Math.max(3_000, Math.min(9_000, Math.floor(budgetMs)));
@@ -574,10 +629,7 @@ async function resolveLink(rawUrl, budgetMs) {
     const host = hostOf(urlStr);
 
     try {
-        if (/gdflix\./i.test(host)) {
-            const html = await fetchPage(urlStr, { timeoutMs });
-            return bypassGdflixFromHtml(html);
-        }
+        if (/gdflix\./i.test(host)) return await bypassGdflix(urlStr, timeoutMs);
         if (/hubcdn\./i.test(host)) return await bypassHubcdn(urlStr, timeoutMs);
         if (/hubdrive\.|hdstream4u\./i.test(host)) return await bypassHubdrive(urlStr, timeoutMs);
         if (/hubcloud\.|hubstream\.|driveseed\./i.test(host)) return await bypassHubcloud(urlStr, timeoutMs);
@@ -697,7 +749,7 @@ async function resolveForUser(urlStr, host, timeoutMs) {
     }
     const title = (html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1] || '').trim().slice(0, 90);
     const extract = (h) => {
-        if (/gdflix\./i.test(host)) return bypassGdflixFromHtml(h);
+        if (/gdflix\./i.test(host)) return bypassGdflix(urlStr, timeoutMs);
         if (/hubcdn\./i.test(host)) return bypassHubcdnFromHtml(h);
         if (/hubdrive\.|hdstream4u\./i.test(host)) return bypassHubdriveFromHtml(h, urlStr, timeoutMs);
         return bypassHubcloudFromHtml(h, urlStr, timeoutMs);
@@ -957,3 +1009,4 @@ export async function enrichResultsWithDirectLinks(results, budgetMs = 8_000) {
 
 export const hdHubBypassService = { resolveManyLinks, applyResolvedLinks, enrichResultsWithDirectLinks, hasBypassableLinks };
 export default hdHubBypassService;
+
