@@ -1300,6 +1300,8 @@ class MovieController {
 
     /**
      * HDHub first; secondary sources only when needed or within a short grace window.
+     * The mkvbase.site source is the exception: it is awaited to its own
+     * budget, not the grace window (see below).
      */
     async _searchMovieSources(query, progress = null) {
         const hdTimeout = config.MOVIE_HD_TIMEOUT_MS || 28_000;
@@ -1348,11 +1350,20 @@ class MovieController {
 
         // Direct mkvbase.site search (signed /api/links API) — additional source
         // alongside the vault API; fail-soft, returns [] when Cloudflare blocks.
+        // Budget is a full attempt chain (handshake + PoW + search, possibly
+        // with one retry) through a proxy, not the 8s secondary cap: an 8s cap
+        // is shorter than a single slow proxy round-trip and dropped good
+        // results. Awaited directly below — never cut by the 2s enrich grace,
+        // which is for enrichment scrapes, not for a source that returns rows.
+        const siteTimeout = config.MKVBASE_SITE_TIMEOUT_MS || 15_000;
         const sitePromise = this._withTimeout(
             mkvbaseSiteService.searchMovies(query, 5),
-            secTimeout,
+            siteTimeout,
             'mkvbase site timeout',
-        ).catch(() => []);
+        ).catch((err) => {
+            logger.warn(`Mkvbase site search failed for "${query}": ${err?.message || err}`);
+            return [];
+        });
 
         const hdResults = await hdPromise;
         const vaultResults = await vaultPromise;
@@ -1376,13 +1387,20 @@ class MovieController {
         const hdHasAtoz = hdResults.some((r) => /^atoz$/i.test(String(r?.source || '').trim()));
 
         if (hdResults.length >= 3) {
-            [driveResults, atozResults, siteResults] = await Promise.all([
+            // Drive/AtoZ are enrichment scrapes: 2s grace, then drop. The
+            // mkvbase.site source is awaited to its own budget instead — its
+            // handshake+PoW+search chain through a proxy routinely needs more
+            // than 2s past HDHub, and cutting it dropped real results.
+            const [driveR, atozR, siteR] = await Promise.all([
                 this._withTimeout(drivePromise, enrichGraceMs, 'drive grace').catch(() => []),
                 hdHasAtoz
                     ? Promise.resolve([])
                     : this._withTimeout(atozPromise, enrichGraceMs, 'atoz grace').catch(() => []),
-                this._withTimeout(sitePromise, enrichGraceMs, 'site grace').catch(() => []),
+                sitePromise,
             ]);
+            driveResults = driveR;
+            atozResults = atozR;
+            siteResults = siteR;
         } else {
             [driveResults, atozResults, siteResults] = await Promise.all([
                 drivePromise,

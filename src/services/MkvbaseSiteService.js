@@ -188,7 +188,13 @@ class MkvbaseSiteService {
                 ...this._proxyOpts(),
             });
             const body = typeof res.data === 'string' ? res.data : String(res.data || '');
-            if (res.status !== 200 || CHALLENGE_RE.test(body.slice(0, 2000).toLowerCase())) {
+            if (CHALLENGE_RE.test(body.slice(0, 2000).toLowerCase())) {
+                throw new Error('handshake got Cloudflare challenge page');
+            }
+            if (res.status === 403 || res.status === 503) {
+                throw new Error(`handshake Cloudflare-challenged (HTTP ${res.status})`);
+            }
+            if (res.status !== 200) {
                 throw new Error(`handshake HTTP ${res.status}`);
             }
             this._session = {
@@ -236,8 +242,27 @@ class MkvbaseSiteService {
         return `${this._base()}/api/links?q=${qHex}&t=${tsMs}&seq=${encodeURIComponent(s.seq)}&pow=${nonce}&ent=${ent}&sig=${sig}`;
     }
 
+    /** Find the search payload in a response body. The API normally returns
+     * a flat `{"count": n, "results": [...]}` object, but tolerate a wrapped
+     * shape (`{"data": {"results": [...]}}`) or a bare rows array — any of
+     * those previously fell through to `null` and dropped every result. */
     _extractJson(text) {
         if (!text) return null;
+        const pick = (obj, depth = 0) => {
+            if (!obj || typeof obj !== 'object') return null;
+            if (Array.isArray(obj)) return { results: obj };
+            if (Array.isArray(obj.results)) return obj;
+            if (depth >= 3) return null;
+            for (const v of Object.values(obj)) {
+                const found = pick(v, depth + 1);
+                if (found) return found;
+            }
+            return null;
+        };
+        try {
+            const parsed = JSON.parse(text);
+            return pick(parsed);
+        } catch { /* not plain JSON — fall through to the brace scan */ }
         const start = text.indexOf('{');
         if (start === -1) return null;
         let depth = 0;
@@ -248,7 +273,8 @@ class MkvbaseSiteService {
                 if (depth === 0) {
                     try {
                         const obj = JSON.parse(text.slice(start, i + 1));
-                        if (obj && typeof obj === 'object' && 'results' in obj) return obj;
+                        const found = pick(obj);
+                        if (found) return found;
                     } catch { /* keep scanning */ }
                 }
             }
@@ -370,6 +396,11 @@ class MkvbaseSiteService {
                 const payload = await this._searchOnce(q);
                 const normalized = this._normalizeResults(payload, q);
                 const results = normalized.slice(0, maxResults);
+                if (!normalized.length) {
+                    // Site answered but had no matches — distinct from a
+                    // failed fetch, so an empty result can be diagnosed.
+                    logger.warn(`[MkvbaseSite] search returned zero rows for "${q}" (site reachable, no matches)`);
+                }
                 logger.info(
                     `[MkvbaseSite] ${results.length}/${normalized.length} grouped from ` +
                     `${payload?.count ?? payload?.results?.length ?? 0} rows for "${q}" ` +
@@ -392,7 +423,16 @@ class MkvbaseSiteService {
             }
         }
 
-        logger.warn(`[MkvbaseSite] gave up for "${q}": ${lastErr?.message || lastErr}`);
+        // Fail-soft, but never silent: name the terminal cause so an empty
+        // result can be diagnosed from the bot's logs.
+        const msg = lastErr?.message || String(lastErr);
+        const challenged = /cloudflare|challenge|403/i.test(msg);
+        logger.warn(
+            `[MkvbaseSite] gave up for "${q}": ${msg}` +
+            (challenged
+                ? ' — Cloudflare is challenging this egress; set MKV_ORIGIN_KEY (owner Cloudflare skip-rule secret) or use an unchallenged egress (a 403 can also mean a bad signature/PoW)'
+                : ''),
+        );
         return [];
     }
 
