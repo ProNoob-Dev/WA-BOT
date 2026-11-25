@@ -174,7 +174,7 @@ class StickerForwarder {
         return false;
     }
 
-    async forwardSticker(sock, waMessage, fromChat, { isRetry = false, isBackfill = false, mediaPending = false } = {}) {
+    async forwardSticker(sock, waMessage, fromChat, { isRetry = false, isBackfill = false, mediaPending = false, retryAttempts = 0 } = {}) {
         if (!this.shouldForwardFrom(fromChat)) {
             return false;
         }
@@ -204,7 +204,7 @@ class StickerForwarder {
             logger.warn(`⚠️ Sticker queue at ${MAX_QUEUE_SIZE} — workers at full capacity`);
         }
 
-        this.queue.push({ sock, waMessage, fromChat, trackId, contentHash, isBackfill, mediaPending });
+        this.queue.push({ sock, waMessage, fromChat, trackId, contentHash, isBackfill, mediaPending, retryAttempts });
         this.countQueued++;
 
         const isChannel = isNewsletterChat(fromChat);
@@ -279,7 +279,7 @@ class StickerForwarder {
                 entry.item.sock,
                 entry.item.waMessage,
                 entry.item.fromChat,
-                { isRetry: true },
+                { isRetry: true, retryAttempts: entry.attempts },
             );
         }
     }
@@ -291,8 +291,11 @@ class StickerForwarder {
             return;
         }
 
+        // _drainRetryLater deletes the entry before re-queueing, so the
+        // count has to ride on the queue item — otherwise every retry
+        // looks like attempt 1 and the sticker retries forever.
         const prev = this.retryLater.get(trackId);
-        const attempts = (prev?.attempts ?? 0) + 1;
+        const attempts = (item.retryAttempts ?? prev?.attempts ?? 0) + 1;
 
         if (attempts >= MAX_RETRIES) {
             this.retryLater.delete(trackId);

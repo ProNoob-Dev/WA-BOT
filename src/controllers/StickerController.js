@@ -469,7 +469,9 @@ class StickerController {
             const mediaPath = this._generateTempFileName('.mp4');
 
             try {
+                const t0 = Date.now();
                 const activeSock = await this._activeSock(sock);
+                const tSock = Date.now();
                 const buffer = await downloadMediaMessage(
                     targetMessage,
                     'buffer',
@@ -484,6 +486,7 @@ class StickerController {
                 }
 
                 await writeFile(mediaPath, buffer);
+                const tDownload = Date.now();
 
                 const stickerPath = this._generateTempFileName('.webp');
                 const audioPath = this._generateTempFileName('.ogg');
@@ -511,6 +514,7 @@ class StickerController {
                         logger.warn(`Audio sticker metadata injection failed: ${metaErr?.message || metaErr}`);
                     }
 
+                    const tBuilt = Date.now();
                     await sendAudioSticker(activeSock, chatId, {
                         webpBuffer: stampedWebp,
                         audioBuffer,
@@ -518,6 +522,10 @@ class StickerController {
                         isAnimated: true,
                         quoted: waMessage,
                     });
+                    logger.info(
+                        `Audio sticker timing: sock=${tSock - t0}ms download=${tDownload - tSock}ms ` +
+                            `render+audio=${tBuilt - tDownload}ms send=${Date.now() - tBuilt}ms`,
+                    );
                 } catch (err) {
                     logger.error('Audio sticker build/send error:', err);
                     await sock.sendMessage(chatId, {
