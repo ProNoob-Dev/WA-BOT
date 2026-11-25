@@ -95,6 +95,13 @@ export const COMMAND_REGISTRY = [
         help: 'Create sticker from image/video (reply; options: circle/c, crop, pack, author, nometadata)',
     },
     {
+        names: ['/astk'],
+        key: 'astk',
+        scope: 'any',
+        role: 'anyone',
+        help: 'Audio sticker from a video — reply to a video, sound plays on tap (options: seconds 1-10, default 5)',
+    },
+    {
         names: ['/steal'],
         key: 'steal',
         scope: 'any',
@@ -970,7 +977,7 @@ export const HELP_CATEGORY = {
     insta: 'media', tw: 'media', toimg: 'media',
 
     // Stickers
-    sticker: 'sticker', steal: 'sticker', rgb: 'sticker', tgstickers: 'sticker', tgstop: 'sticker', tgstickeron: 'sticker', tgstickeroff: 'sticker',
+    sticker: 'sticker', steal: 'sticker', rgb: 'sticker', astk: 'sticker', tgstickers: 'sticker', tgstop: 'sticker', tgstickeron: 'sticker', tgstickeroff: 'sticker',
 
     // Markets
     tradenow: 'trade', swing: 'trade', expiry: 'trade', tradelert: 'trade', index: 'trade', scalp: 'trade', sweep: 'trade',

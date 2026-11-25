@@ -872,6 +872,15 @@ export const COMMAND_HANDLERS = {
             void safeSendMessage(sock, chatId, { text: '⚠️ Failed to process sticker command.' }, originalMsg);
         });
     },
+    astk: ({ sock, chatId, args, originalMsg, fullCommand, ctx }) => {
+        if (!ctx.stickerController) {
+            return safeSendMessage(sock, chatId, { text: '⚠️ Sticker functionality is not available.' }, originalMsg);
+        }
+        void ctx.stickerController.handleAudioSticker(sock, chatId, originalMsg, args, fullCommand).catch((err) => {
+            logger.error('Audio sticker command error:', err);
+            void safeSendMessage(sock, chatId, { text: '⚠️ Failed to process audio sticker command.' }, originalMsg);
+        });
+    },
     steal: ({ sock, chatId, args, originalMsg, fullCommand, ctx }) => {
         if (!ctx.stickerController) {
             return safeSendMessage(sock, chatId, { text: '⚠️ Sticker functionality is not available.' }, originalMsg);

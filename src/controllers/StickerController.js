@@ -5,7 +5,8 @@
 
 import { downloadMediaMessage, downloadContentFromMessage, normalizeMessageContent } from 'baileys';
 import { getTextFromWAMessage, buildQuotedTargetMessage } from '../utils/waMessage.js';
-import { downloadStickerBuffer, createDownloadContext } from '../utils/stickerDownload.js';
+import { downloadStickerBuffer, createDownloadContext, isValidWebpBuffer } from '../utils/stickerDownload.js';
+import { sendAudioSticker } from '../utils/audioSticker.js';
 import { extractStickerFromMessage } from '../utils/stickerExtract.js';
 import fs from 'fs';
 import { writeFile } from 'fs/promises';
@@ -23,6 +24,7 @@ const BUNDLED_FONT_PATH = path.resolve(__dirname, '../../fonts/Roboto-Bold.ttf')
 /** Lazy ffmpeg — avoid loading fluent-ffmpeg/ffmpeg-static at boot. */
 let _ffmpeg = null;
 let _ffmpegReady = null;
+let _ffmpegPath = null;
 async function getFfmpeg() {
     if (_ffmpeg) return _ffmpeg;
     if (!_ffmpegReady) {
@@ -39,6 +41,7 @@ async function getFfmpeg() {
                 }
             }
             ffmpeg.setFfmpegPath(ffmpegPath);
+            _ffmpegPath = ffmpegPath;
             logger.info(`🎬 Sticker functionality using FFmpeg: ${ffmpegPath}`);
             _ffmpeg = ffmpeg;
             return ffmpeg;
@@ -374,6 +377,156 @@ class StickerController {
             logger.error('Sticker handler error:', error);
             await sock.sendMessage(chatId, {
                 text: '⚠️ Failed to create sticker.'
+            });
+        }
+    }
+
+    /** `/astk [seconds]` — first arg is the audio length, 1–10s, default 5. */
+    _parseAudioStickerSeconds(args) {
+        const n = parseInt(args?.[0], 10);
+        if (!Number.isFinite(n)) {
+            return 5;
+        }
+        return Math.min(10, Math.max(1, n));
+    }
+
+    /** True when the file has an audio stream (ffmpeg -i lists it). */
+    async _hasAudioTrack(mediaPath) {
+        const { execFile } = await import('node:child_process');
+        const stderr = await new Promise((resolve) => {
+            execFile(_ffmpegPath || 'ffmpeg', ['-i', mediaPath], (_err, _stdout, errOut) => {
+                resolve(errOut || '');
+            });
+        });
+        return /Stream #\d+:\d+.*Audio:/.test(stderr);
+    }
+
+    /**
+     * Pull the first `seconds` of audio out of a video as Opus in Ogg —
+     * 48 kHz mono, the flags phones need to play the sound back.
+     */
+    async _extractAudioClip(mediaPath, outputPath, seconds) {
+        const ffmpeg = await getFfmpeg();
+        if (!(await this._hasAudioTrack(mediaPath))) {
+            throw new Error('no audio track in video');
+        }
+        await this._enqueueFfmpeg(() => this._runFfmpeg(
+            ffmpeg(mediaPath)
+                .addOutputOptions([
+                    '-vn',
+                    '-c:a', 'libopus',
+                    '-ar', '48000',
+                    '-ac', '1',
+                    '-b:a', '64k',
+                    '-vbr', 'on',
+                    '-compression_level', '10',
+                    '-frame_duration', '20',
+                    '-t', String(seconds),
+                ])
+                .toFormat('ogg')
+                .save(outputPath),
+        ));
+        if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+            throw new Error('no audio track in video');
+        }
+    }
+
+    /**
+     * Audio sticker from a video: animated WebP + the video's own sound
+     * as a separate Opus track, sent as one audioStickerMessage.
+     * Reply to a video — a bare voice note has no visual base.
+     */
+    async handleAudioSticker(sock, chatId, waMessage, args, textContent) {
+        void sock.sendMessage(chatId, {
+            text: '🔊 _Making your audio sticker... you can use other commands meanwhile._',
+        }, { quoted: waMessage }).catch(() => {});
+
+        try {
+            const targetMessage = buildQuotedTargetMessage(waMessage) || {
+                ...waMessage,
+                message: waMessage.message.extendedTextMessage?.contextInfo?.quotedMessage
+                    ? waMessage.message.extendedTextMessage.contextInfo.quotedMessage
+                    : waMessage.message,
+            };
+
+            const normalized = normalizeMessageContent(targetMessage.message) || targetMessage.message;
+            const messageType = Object.keys(normalized)[0];
+            if (messageType !== 'videoMessage') {
+                await sock.sendMessage(chatId, {
+                    text: '❌ Please reply to a video with sound (max 60 seconds).\n\n💡 _Usage: reply to a video with_ `/astk` _or_ `/astk 7` _for 7 seconds of audio._',
+                });
+                return;
+            }
+
+            if (normalized.videoMessage?.seconds > 60) {
+                await sock.sendMessage(chatId, {
+                    text: '❌ Video must be less than 60 seconds.',
+                });
+                return;
+            }
+
+            const seconds = this._parseAudioStickerSeconds(args);
+            const mediaPath = this._generateTempFileName('.mp4');
+
+            try {
+                const activeSock = await this._activeSock(sock);
+                const buffer = await downloadMediaMessage(
+                    targetMessage,
+                    'buffer',
+                    {},
+                    createDownloadContext(activeSock),
+                );
+                if (!buffer || buffer.length === 0) {
+                    await sock.sendMessage(chatId, {
+                        text: '❌ Failed to download video. Please try again.',
+                    });
+                    return;
+                }
+
+                await writeFile(mediaPath, buffer);
+
+                const stickerPath = this._generateTempFileName('.webp');
+                const audioPath = this._generateTempFileName('.ogg');
+                try {
+                    await this._renderStandardSticker(mediaPath, stickerPath, 'crop');
+                    await this._extractAudioClip(mediaPath, audioPath, seconds);
+
+                    const webpBuffer = fs.readFileSync(stickerPath);
+                    const audioBuffer = fs.readFileSync(audioPath);
+                    if (!isValidWebpBuffer(webpBuffer)) {
+                        throw new Error('sticker render did not produce WebP');
+                    }
+
+                    await sendAudioSticker(activeSock, chatId, {
+                        webpBuffer,
+                        audioBuffer,
+                        seconds,
+                        isAnimated: true,
+                        quoted: waMessage,
+                    });
+                } catch (err) {
+                    logger.error('Audio sticker build/send error:', err);
+                    await sock.sendMessage(chatId, {
+                        text: err?.message === 'no audio track in video'
+                            ? '❌ That video has no sound — reply to a video with audio.'
+                            : '❌ Failed to create audio sticker.',
+                    });
+                } finally {
+                    this._safeUnlink(stickerPath);
+                    this._safeUnlink(audioPath);
+                }
+            } catch (error) {
+                logger.error('Audio sticker media error:', error);
+                await sock.sendMessage(chatId, {
+                    text: '❌ Failed to process video.',
+                });
+            } finally {
+                this._safeUnlink(mediaPath);
+            }
+        } catch (error) {
+            logger.error('Audio sticker handler error:', error);
+            await sock.sendMessage(chatId, {
+                text: '⚠️ Failed to create audio sticker.',
             });
         }
     }

@@ -8,6 +8,11 @@ import { jidNormalizedUser } from 'baileys';
 import { logger } from '../utils/logger.js';
 import { downloadStickerBuffer, isValidWebpBuffer } from '../utils/stickerDownload.js';
 import { extractStickerFromMessage, isNewsletterChat } from '../utils/stickerExtract.js';
+import {
+    downloadAudioStickerAudio,
+    extractAudioStickerFromMessage,
+    sendAudioSticker,
+} from '../utils/audioSticker.js';
 
 const MAX_QUEUE_SIZE = 1000;
 const MAX_COMPLETED = 2000;
@@ -358,34 +363,62 @@ class StickerForwarder {
         }
 
         let stickerBuffer = buffer;
-        try {
-            const { Sticker } = await import('wa-sticker-formatter');
-            const sticker = new Sticker(buffer, {
-                pack: this.packName,
-                author: this.packAuthor,
-                type: 'default',
-                quality: 50,
-            });
-            const repacked = await sticker.toBuffer();
-            if (isValidWebpBuffer(repacked)) {
-                stickerBuffer = repacked;
-            } else {
-                logger.warn('Sticker re-pack produced invalid WebP, sending original');
+
+        // Sound sticker: carry the audio sidecar along instead of re-packing
+        // the WebP (re-packing would drop the sound). If the audio can't be
+        // fetched, fall back to forwarding the silent WebP.
+        let audioBuffer = null;
+        let audioSeconds = 5;
+        let audioIsAnimated = false;
+        const audioSticker = extractAudioStickerFromMessage(waMessage.message);
+        if (audioSticker?.audioMessage) {
+            try {
+                audioBuffer = await downloadAudioStickerAudio(sock, audioSticker.audioMessage);
+                audioSeconds = audioSticker.audioMessage.seconds || 5;
+                audioIsAnimated = Boolean(audioSticker.stickerMessage.isAnimated);
+            } catch (audioErr) {
+                logger.warn(`Sound sticker audio download failed, forwarding silent: ${audioErr.message}`);
             }
-        } catch (formatError) {
-            logger.warn(`Sticker re-pack failed, sending original: ${formatError.message}`);
+        }
+
+        if (!audioBuffer) {
+            try {
+                const { Sticker } = await import('wa-sticker-formatter');
+                const sticker = new Sticker(buffer, {
+                    pack: this.packName,
+                    author: this.packAuthor,
+                    type: 'default',
+                    quality: 50,
+                });
+                const repacked = await sticker.toBuffer();
+                if (isValidWebpBuffer(repacked)) {
+                    stickerBuffer = repacked;
+                } else {
+                    logger.warn('Sticker re-pack produced invalid WebP, sending original');
+                }
+            } catch (formatError) {
+                logger.warn(`Sticker re-pack failed, sending original: ${formatError.message}`);
+            }
         }
 
         const results = await Promise.allSettled(
             targetGroups.map((targetGroup) =>
-                sock.sendMessage(
-                    targetGroup,
-                    { sticker: stickerBuffer },
-                    {
+                audioBuffer
+                    ? sendAudioSticker(sock, targetGroup, {
+                        webpBuffer: stickerBuffer,
+                        audioBuffer,
+                        seconds: audioSeconds,
+                        isAnimated: audioIsAnimated,
                         ephemeralExpiration: 86400,
-                        mediaUploadTimeoutMs: 90000,
-                    }
-                )
+                    })
+                    : sock.sendMessage(
+                        targetGroup,
+                        { sticker: stickerBuffer },
+                        {
+                            ephemeralExpiration: 86400,
+                            mediaUploadTimeoutMs: 90000,
+                        },
+                    )
             )
         );
 
@@ -420,7 +453,8 @@ class StickerForwarder {
      * so a 40-sticker pack doesn't trip WhatsApp's rate limiting.
      *
      * @param {import('baileys').WASocket} sock
-     * @param {Array<{ buffer: Buffer, isAnimated?: boolean }>} stickers
+     * @param {Array<{ buffer: Buffer, isAnimated?: boolean,
+     *           audioBuffer?: Buffer, seconds?: number }>} stickers
      * @param {{ signal?: AbortSignal, gapMs?: number, exclude?: string[],
      *           onProgress?: (sent: number, total: number) => void }} [opts]
      * @returns {Promise<{ targets: string[], sent: number, failed: number }>}
@@ -441,12 +475,22 @@ class StickerForwarder {
             for (const target of targets) {
                 if (signal?.aborted) break;
                 try {
-                    const content = { sticker: sticker.buffer };
-                    if (sticker.isAnimated) content.isAnimated = true;
-                    await sock.sendMessage(target, content, {
-                        ephemeralExpiration: 86400,
-                        mediaUploadTimeoutMs: 90000,
-                    });
+                    if (sticker.audioBuffer) {
+                        await sendAudioSticker(sock, target, {
+                            webpBuffer: sticker.buffer,
+                            audioBuffer: sticker.audioBuffer,
+                            seconds: sticker.seconds || 5,
+                            isAnimated: sticker.isAnimated,
+                            ephemeralExpiration: 86400,
+                        });
+                    } else {
+                        const content = { sticker: sticker.buffer };
+                        if (sticker.isAnimated) content.isAnimated = true;
+                        await sock.sendMessage(target, content, {
+                            ephemeralExpiration: 86400,
+                            mediaUploadTimeoutMs: 90000,
+                        });
+                    }
                     sent++;
                     this.countSent++;
                 } catch (err) {

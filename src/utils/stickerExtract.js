@@ -46,6 +46,13 @@ export function extractStickerFromMessage(message) {
         return content.stickerMessage;
     }
 
+    // Sound sticker: the sticker payload lives inside audioStickerMessage
+    // (field 134); the audio sidecar rides on StickerMessage.audioMessage.
+    const audioSticker = content.audioStickerMessage?.message?.stickerMessage;
+    if (audioSticker) {
+        return audioSticker;
+    }
+
     const doc = content.documentMessage;
     if (doc && (doc.mimetype === 'image/webp' || doc.mimetype?.includes('webp'))) {
         return mediaAsSticker(doc);

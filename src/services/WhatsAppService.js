@@ -25,6 +25,8 @@ import {
 import { rememberLidPnFromMessageKey } from '../utils/lid.js';
 import { resolveChannelSourceEntries } from '../utils/channelResolve.js';
 import { extractStickerFromMessage, isNewsletterChat } from '../utils/stickerExtract.js';
+import { ensureAudioStickerProtoPatched } from '../utils/audioSticker.js';
+import { findCommand } from '../commands/registry.js';
 import { isStickerForwardReady } from '../utils/stickerDownload.js';
 import { groupMessageTracker } from '../utils/groupMessageTracker.js';
 import { groupParticipantSnapshot } from '../utils/groupParticipantSnapshot.js';
@@ -55,6 +57,24 @@ function shouldAutoDetectInstaLink(chatId) {
         return false;
     }
     return true;
+}
+
+/**
+ * `.cmd` works like `/cmd` when it names a registered command, so the
+ * audio-sticker command answers to `.astk` as well as `/astk`. Anything
+ * else starting with a dot passes through untouched.
+ */
+function normalizeCommandPrefix(text) {
+    if (!text?.startsWith('.')) {
+        return text;
+    }
+    const first = text.split(/\s+/)[0];
+    if (!first || first === '.') {
+        return text;
+    }
+    return findCommand(`/${first.slice(1).toLowerCase()}`)
+        ? `/${text.slice(1)}`
+        : text;
 }
 
 class WhatsAppService {
@@ -227,6 +247,10 @@ class WhatsAppService {
             if (!key?.remoteJid || !key?.id) return undefined;
             return this._messageCache.get(`${key.remoteJid}:${key.id}`);
         };
+
+        // Sound stickers need Baileys' proto patched before any message is
+        // decoded — otherwise incoming audioStickerMessage fields are lost.
+        ensureAudioStickerProtoPatched();
 
         this.sock = makeWASocket({
             version,
@@ -615,7 +639,7 @@ class WhatsAppService {
         }
 
         const msgContent = msg.message;
-        const messageTextPreview = getTextFromWAMessage(msgContent).trim();
+        const messageTextPreview = normalizeCommandPrefix(getTextFromWAMessage(msgContent).trim());
         const textForUrlsPreview = getTextForUrlScan(msgContent).trim();
         const isCommandMessage = messageTextPreview.startsWith('/');
 
