@@ -238,24 +238,44 @@ class StickerController {
     }
 
     async _renderStandardSticker(mediaPath, outputPath, shape) {
-        const outputOptions = shape === 'crop'
-            ? [
-                '-vcodec', 'libwebp',
-                '-vf', "crop=w='min(min(iw,ih),500)':h='min(min(iw,ih),500)',scale=500:500,setsar=1,fps=15",
-                '-loop', '0',
-                '-ss', '00:00:00.0',
-                '-t', '00:00:09.0',
-                '-preset', 'default',
-                '-an',
-                '-vsync', '0',
-                '-s', '512:512',
-            ]
-            : [
-                '-vcodec', 'libwebp',
-                '-vf', "scale='min(220,iw)':min'(220,ih)':force_original_aspect_ratio=decrease,fps=15, pad=220:220:-1:-1:color=white@0.0, split [a][b]; [a] palettegen=reserve_transparent=on:transparency_color=ffffff [p]; [b][p] paletteuse",
-            ];
-
         const ffmpeg = await getFfmpeg();
+        if (shape === 'crop') {
+            // WhatsApp won't display animated stickers over 500KB — the old
+            // 9s/15fps render of a busy clip came out at ~880KB, so the
+            // image never showed while the audio still played. Render 6s
+            // at 12fps first, step down only if the file is still too big.
+            const attempts = [
+                { fps: 12, quality: 70, seconds: 6 },
+                { fps: 10, quality: 60, seconds: 6 },
+                { fps: 8, quality: 50, seconds: 5 },
+            ];
+            for (const { fps, quality, seconds } of attempts) {
+                await this._enqueueFfmpeg(() => this._runFfmpeg(
+                    ffmpeg(mediaPath).addOutputOptions([
+                        '-vcodec', 'libwebp',
+                        '-vf', `crop=w='min(min(iw,ih),500)':h='min(min(iw,ih),500)',scale=500:500,setsar=1,fps=${fps}`,
+                        '-loop', '0',
+                        '-ss', '00:00:00.0',
+                        '-t', `00:00:0${seconds}.0`,
+                        '-preset', 'default',
+                        '-an',
+                        '-vsync', '0',
+                        '-s', '512:512',
+                        '-q:v', String(quality),
+                    ]).toFormat('webp').save(outputPath)
+                ));
+                if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 480 * 1024) {
+                    break;
+                }
+            }
+            return;
+        }
+
+        const outputOptions = [
+            '-vcodec', 'libwebp',
+            '-vf', "scale='min(220,iw)':min'(220,ih)':force_original_aspect_ratio=decrease,fps=15, pad=220:220:-1:-1:color=white@0.0, split [a][b]; [a] palettegen=reserve_transparent=on:transparency_color=ffffff [p]; [b][p] paletteuse",
+        ];
+
         await this._enqueueFfmpeg(() => this._runFfmpeg(
             ffmpeg(mediaPath).addOutputOptions(outputOptions).toFormat('webp').save(outputPath)
         ));
