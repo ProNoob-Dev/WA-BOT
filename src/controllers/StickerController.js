@@ -497,8 +497,22 @@ class StickerController {
                         throw new Error('sticker render did not produce WebP');
                     }
 
+                    // Stamp the pack/author metadata like /sticker does —
+                    // without it WhatsApp shows no pack name on the sticker.
+                    let stampedWebp = webpBuffer;
+                    try {
+                        const StickerExif = await getStickerExif();
+                        const exif = new StickerExif({
+                            pack: this.defaultPack,
+                            author: this.defaultAuthor,
+                        });
+                        stampedWebp = await exif.add(webpBuffer);
+                    } catch (metaErr) {
+                        logger.warn(`Audio sticker metadata injection failed: ${metaErr?.message || metaErr}`);
+                    }
+
                     await sendAudioSticker(activeSock, chatId, {
-                        webpBuffer,
+                        webpBuffer: stampedWebp,
                         audioBuffer,
                         seconds,
                         isAnimated: true,
