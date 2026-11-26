@@ -62,7 +62,9 @@ class StickerController {
         this.tempDir = path.join(os.tmpdir(), 'whatsapp-bot-stickers');
         this._ffmpegQueue = [];
         this._ffmpegActive = 0;
-        this._ffmpegMax = 2;
+        // ponytail: live instance is Koyeb free tier, a fraction of a vCPU —
+        // two encodes at once just split it and both get slower. Raise when the instance grows.
+        this._ffmpegMax = 1;
         this._connectionProvider = null;
         this._ensureTempDir();
     }
@@ -242,11 +244,12 @@ class StickerController {
         if (shape === 'crop') {
             // WhatsApp won't display animated stickers over 500KB — the old
             // 9s/15fps render of a busy clip came out at ~880KB, so the
-            // image never showed while the audio still played. Render 6s
-            // at 12fps first, step down only if the file is still too big.
+            // image never showed while the audio still played. First attempt
+            // is 5s/10fps: measured ~32% faster to encode and ~38% smaller
+            // than 6s/12fps on the test clip, so most clips fit first try
+            // instead of re-rendering twice on a CPU-starved instance.
             const attempts = [
-                { fps: 12, quality: 70, seconds: 6 },
-                { fps: 10, quality: 60, seconds: 6 },
+                { fps: 10, quality: 60, seconds: 5 },
                 { fps: 8, quality: 50, seconds: 5 },
             ];
             for (const { fps, quality, seconds } of attempts) {
