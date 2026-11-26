@@ -180,7 +180,20 @@ assert.strictEqual(client.calls.forwards.length, 2, 'each file must be forwarded
 assert.deepStrictEqual(result.files[0].links, ['https://reaper.example.com/dl/abc123']);
 assert.deepStrictEqual(result.files[1].links, ['https://reaper.example.com/dl/abc123']);
 
-// Fallback: bot 1 answers the first file, then throttles — the second file
+// Shortening: a working shortener returns the short link, a failing one
+// returns the original — a link is never lost to the shortener.
+const realFetch = globalThis.fetch;
+globalThis.fetch = async () => ({ text: async () => 'https://is.gd/abc123' });
+assert.strictEqual(
+    await service.shortenUrl('https://plgb.koyeb.app/t/dl/AAAAACXF1uBT0TMHAAAeqAA/dn5RMylJhFAZcMyrODSaXL50fgRKjayjS_j4rzWQaUY'),
+    'https://is.gd/abc123',
+);
+globalThis.fetch = async () => { throw new Error('no network'); };
+assert.strictEqual(
+    await service.shortenUrl('https://f2l.reaperzclub.dpdns.org/xp169s9?hash=AgADph&dl=1'),
+    'https://f2l.reaperzclub.dpdns.org/xp169s9?hash=AgADph&dl=1',
+);
+globalThis.fetch = realFetch;
 // must go to the next bot, and no link may be sent twice.
 const fallbackClient = fakeClient({
     searchMessages: searchMsgs,
@@ -230,11 +243,12 @@ const sock = {
         return { key: { id: 'x' } };
     },
 };
+service.shortenUrl = async () => 'https://is.gd/abc123';
 await handleTgMovie(sock, 'chat1', 'owner@lid', ['Hanuman'], { telegramMovieService: service });
 const allSent = sent.map((s) => s.text).join('\n');
 assert.ok(allSent.includes('Hanu-Man.2024.720p.mkv'), 'reply must list the 720p file');
 assert.ok(allSent.includes('Hanu-Man.2024.1080p.mkv'), 'reply must list the 1080p file');
-assert.ok(allSent.includes('https://reaper.example.com/dl/abc123'), 'reply must include the link bot links');
+assert.ok(allSent.includes('https://is.gd/abc123'), 'reply must include the shortened link');
 assert.ok(allSent.includes('Searching Universe Database for *Hanuman*'), 'first message must name Universe Database');
 assert.ok(/Sent all links/.test(sent.at(-1)?.text || ''), 'last message must say all links were sent');
 

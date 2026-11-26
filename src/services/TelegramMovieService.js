@@ -349,6 +349,29 @@ export class TelegramMovieService {
         return mediaEntries(found);
     }
 
+    /**
+     * Shorten a long FileToLink URL (is.gd, no key needed). Falls back to the
+     * original link on any failure — a link is never lost to the shortener.
+     */
+    async shortenUrl(url) {
+        const original = String(url || '');
+        try {
+            const res = await withTimeout(
+                fetch(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(original)}`),
+                5_000,
+                'shorten link',
+            );
+            const short = String(await res.text()).trim();
+            if (/^https?:\/\/\S+$/.test(short)) {
+                logger.info(`tgmovie: shortened ${original.slice(0, 50)}… → ${short}`);
+                return short;
+            }
+        } catch (err) {
+            logger.warn(`tgmovie: shorten failed for ${original.slice(0, 50)}…: ${err?.message || err}`);
+        }
+        return original;
+    }
+
     /** Wait for one bot's reply links after a forward. */
     async _waitForLinks(bot, botName, before) {
         const deadline = Date.now() + PER_BOT_WAIT_MS;

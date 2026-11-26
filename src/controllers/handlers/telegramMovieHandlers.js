@@ -88,8 +88,10 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
             sentCount += 1;
             if (links.length) withLinks += 1;
             const lines = [`📁 *${file.fileName}*`];
-            if (links.length) lines.push(...links.map((u) => `🔗 ${u}`));
-            else lines.push('_No link back yet — every link bot was busy or silent. Try again in a bit._');
+            if (links.length) {
+                const shortLinks = await Promise.all(links.map((u) => service.shortenUrl(u)));
+                lines.push(...shortLinks.map((u) => `🔗 ${u}`));
+            } else lines.push('_No link back yet — every link bot was busy or silent. Try again in a bit._');
             await send(sock, chatId, lines.join('\n'), originalMsg);
             if (progressKey) await updateProgress(sock, chatId, progressKey, progressText(total, withLinks));
         }, async (total) => {
