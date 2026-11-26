@@ -71,8 +71,17 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
     }
     await send(sock, chatId, `🔍 Searching your Telegram channel for *${query}*…`, originalMsg);
     let result;
+    let sentCount = 0;
+    let withLinks = 0;
     try {
-        result = await service.searchWithLinks(query);
+        result = await service.searchWithLinks(query, async ({ file, links, bot }) => {
+            sentCount += 1;
+            if (links.length) withLinks += 1;
+            const lines = [`📁 *${file.fileName}*`];
+            if (links.length) lines.push(...links.map((u) => `🔗 ${u}`));
+            else lines.push('_No link back yet — every link bot was busy or silent. Try again in a bit._');
+            await send(sock, chatId, lines.join('\n'), originalMsg);
+        });
     } catch (err) {
         logger.warn(`tgmovie search failed for "${query}": ${err?.message || err}`);
         const hint = /not logged in/i.test(String(err?.message || err))
@@ -85,12 +94,7 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
         await send(sock, chatId, `❌ Nothing found for *${query}* in your Telegram channel.`, originalMsg);
         return;
     }
-    const lines = [`🎬 *${query}* — ${result.files.length} file${result.files.length > 1 ? 's' : ''} found:\n`];
-    for (const { file, links } of result.files) {
-        lines.push(`📁 *${file.fileName}*`);
-        if (links.length) lines.push(...links.map((u) => `🔗 ${u}`));
-        else lines.push('_No link back from the link bot yet — try again in a bit._');
-        lines.push('');
+    if (sentCount) {
+        await send(sock, chatId, `✅ Done — ${withLinks}/${result.files.length} file${result.files.length > 1 ? 's' : ''} with links.`, originalMsg);
     }
-    await send(sock, chatId, lines.join('\n').trim(), originalMsg);
 }

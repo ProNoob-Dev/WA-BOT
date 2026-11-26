@@ -26,6 +26,7 @@ const {
     TelegramMovieService,
     extractLinks,
     extractUrlsFromMessage,
+    isLimitReply,
     mediaEntries,
 } = await import('../src/services/TelegramMovieService.js');
 const { findCommand } = await import('../src/commands/registry.js');
@@ -49,8 +50,10 @@ const msg = (id, documentId, caption, fileName) => ({
     },
 });
 
-function fakeClient({ searchMessages = [], botReplies = [] } = {}) {
+function fakeClient({ searchMessages = [], botReplies = {} } = {}) {
+    // botReplies: { botName: (forwardCount) => [messages] }
     const calls = { forwards: [] };
+    let forwardCount = 0;
     return {
         calls,
         async connect() {},
@@ -65,9 +68,11 @@ function fakeClient({ searchMessages = [], botReplies = [] } = {}) {
             return [];
         },
         async getMessages(entity) {
-            return entity?.__entity === 'reaperfiletolinkbot' ? botReplies : searchMessages;
+            const fn = botReplies[entity?.__entity];
+            return fn ? fn(forwardCount) : searchMessages;
         },
         async forwardMessages(entity, { messages, fromPeer }) {
+            forwardCount += 1;
             calls.forwards.push({ entity, messages, fromPeer });
             return [{ id: 999 }];
         },
@@ -80,6 +85,12 @@ function fakeClient({ searchMessages = [], botReplies = [] } = {}) {
         session: { save: () => 'FAKE-SESSION' },
     };
 }
+
+const linkReply = (url) => ({
+    id: 50, date: 9999999999, message: 'Here is your file, tap below',
+    reply_markup: { rows: [{ buttons: [{ url }] }] },
+});
+const limitReply = { id: 51, date: 9999999999, message: 'Sorry, you have reached the limit of 2 links per minute. Try again later.' };
 
 // 1. Pure helpers -----------------------------------------------------------
 assert.deepStrictEqual(
@@ -132,11 +143,16 @@ assert.deepStrictEqual(
 assert.strictEqual(entries[0].fileName, 'Hanu-Man.2024.720p.mkv');
 
 // 2. Service with a fake client --------------------------------------------
-const botReplies = [
-    // Button-only reply, like the real link bot: no URL in the text itself.
-    { id: 50, date: 9999999999, message: 'Here is your file, tap below', reply_markup: { rows: [{ buttons: [{ url: 'https://reaper.example.com/dl/abc123' }] }] } },
-];
-const client = fakeClient({ searchMessages: entries.map((e, i) => msg(i + 1, e.documentId, e.caption, e.fileName)), botReplies });
+// Limit detection: a throttling reply counts, a plain "please wait" does not.
+assert.strictEqual(isLimitReply('Sorry, you have reached the limit of 2 links per minute'), true);
+assert.strictEqual(isLimitReply('Please wait, generating your link'), false);
+assert.strictEqual(isLimitReply('Here is your file'), false);
+
+const searchMsgs = entries.map((e, i) => msg(i + 1, e.documentId, e.caption, e.fileName));
+const client = fakeClient({
+    searchMessages: searchMsgs,
+    botReplies: { reaperfiletolinkbot: () => [linkReply('https://reaper.example.com/dl/abc123')] },
+});
 const service = new TelegramMovieService({ createClient: () => client });
 
 const found = await service.searchChannel('Hanuman');
@@ -147,6 +163,30 @@ assert.strictEqual(result.files.length, 2, 'searchWithLinks must return one resu
 assert.strictEqual(client.calls.forwards.length, 2, 'each file must be forwarded once');
 assert.deepStrictEqual(result.files[0].links, ['https://reaper.example.com/dl/abc123']);
 assert.deepStrictEqual(result.files[1].links, ['https://reaper.example.com/dl/abc123']);
+
+// Fallback: bot 1 answers the first file, then throttles — the second file
+// must go to the next bot, and no link may be sent twice.
+const fallbackClient = fakeClient({
+    searchMessages: searchMsgs,
+    botReplies: {
+        reaperfiletolinkbot: (forwards) => (forwards <= 1
+            ? [linkReply('https://reaper.example.com/dl/abc123')]
+            : [limitReply]),
+        PublicDirectFileToLinkBot: () => [linkReply('https://public.example.com/dl/xyz789')],
+    },
+});
+const fallbackService = new TelegramMovieService({ createClient: () => fallbackClient });
+const streamed = [];
+const fallbackResult = await fallbackService.searchWithLinks('Hanuman', async (entry) => {
+    streamed.push(entry);
+});
+assert.strictEqual(streamed.length, 2, 'onFile must fire once per file, as each finishes');
+assert.strictEqual(streamed[0].bot, 'reaperfiletolinkbot');
+assert.strictEqual(streamed[1].bot, 'PublicDirectFileToLinkBot', 'throttled bot must fall through to the next one');
+assert.deepStrictEqual(streamed[1].links, ['https://public.example.com/dl/xyz789']);
+assert.strictEqual(fallbackClient.calls.forwards.length, 3, 'file 1 -> bot 1, file 2 -> bot 1 (limited) -> bot 2');
+const allLinks = fallbackResult.files.flatMap((f) => f.links);
+assert.strictEqual(new Set(allLinks).size, allLinks.length, 'no link may be sent twice');
 
 // 3. Login flow --------------------------------------------------------------
 const loginClient = fakeClient();
@@ -175,10 +215,11 @@ const sock = {
     },
 };
 await handleTgMovie(sock, 'chat1', 'owner@lid', ['Hanuman'], { telegramMovieService: service });
-const reply = sent.at(-1)?.text || '';
-assert.ok(reply.includes('Hanu-Man.2024.720p.mkv'), 'reply must list the 720p file');
-assert.ok(reply.includes('Hanu-Man.2024.1080p.mkv'), 'reply must list the 1080p file');
-assert.ok(reply.includes('https://reaper.example.com/dl/abc123'), 'reply must include the link bot links');
+const allSent = sent.map((s) => s.text).join('\n');
+assert.ok(allSent.includes('Hanu-Man.2024.720p.mkv'), 'reply must list the 720p file');
+assert.ok(allSent.includes('Hanu-Man.2024.1080p.mkv'), 'reply must list the 1080p file');
+assert.ok(allSent.includes('https://reaper.example.com/dl/abc123'), 'reply must include the link bot links');
+assert.ok(/Done — 2\/2 files with links/.test(sent.at(-1)?.text || ''), 'last message must be the done line');
 
 const sent2 = [];
 const sock2 = {

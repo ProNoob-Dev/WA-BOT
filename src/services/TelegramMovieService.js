@@ -15,6 +15,12 @@
  * Telegram document id). Different qualities are different files, so all of
  * them are forwarded and all of their links come back. Series episodes are
  * separate files and each gets its own links.
+ *
+ * Link bots: the first bot answers most files, but it throttles (about 2
+ * links a minute). When a bot answers with a limit message or stays silent,
+ * the file is tried on the next bot in TG_LINK_BOTS instead. Results stream
+ * out per file as they arrive — the caller is not kept waiting for the
+ * slowest file.
  */
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
@@ -24,10 +30,17 @@ import { config } from '../config/config.js';
 import { logger } from '../utils/logger.js';
 
 const URL_RE = /https?:\/\/[^\s)>\]]+/g;
-const LINK_WAIT_MS = 90_000;
 const LINK_POLL_MS = 3_000;
+const PER_BOT_WAIT_MS = 30_000;
+const LIMIT_COOLDOWN_MS = 60_000;
 const FORWARD_GAP_MS = 1_000;
+const LIMIT_RE = /limit|flood|too many|try again later|per minute|rate limit|slow down/i;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** True when a bot reply says it is throttling (not a normal "please wait"). */
+export function isLimitReply(text) {
+    return LIMIT_RE.test(String(text || ''));
+}
 
 export function extractLinks(text) {
     const seen = new Set();
@@ -116,6 +129,7 @@ export class TelegramMovieService {
         this._client = null;
         this._me = null;
         this._login = null;
+        this._limitedUntil = new Map();
     }
 
     get channelId() {
@@ -123,11 +137,28 @@ export class TelegramMovieService {
     }
 
     get linkBot() {
-        return String(config.TG_LINK_BOT || 'reaperfiletolinkbot').trim();
+        return this.linkBots[0];
+    }
+
+    get linkBots() {
+        const list = String(config.TG_LINK_BOTS || config.TG_LINK_BOT || 'reaperfiletolinkbot')
+            .split(',')
+            .map((b) => b.trim())
+            .filter(Boolean);
+        return list.length ? list : ['reaperfiletolinkbot'];
     }
 
     isLoggedIn() {
         return Boolean(this._client && this._me);
+    }
+
+    _isLimited(botName) {
+        return (this._limitedUntil.get(botName) || 0) > Date.now();
+    }
+
+    _markLimited(botName) {
+        this._limitedUntil.set(botName, Date.now() + LIMIT_COOLDOWN_MS);
+        logger.warn(`tgmovie: @${botName} is throttling — skipping it for ${LIMIT_COOLDOWN_MS / 1000}s`);
     }
 
     /** Connect with the saved session (if any). Returns true when authorised. */
@@ -280,37 +311,70 @@ export class TelegramMovieService {
         return mediaEntries(found);
     }
 
-    /** Forward one channel file to the link bot and wait for its reply links. */
-    async linksForFile(file, channelEntity = null) {
-        const client = await this.ensureClient();
-        const channel = channelEntity || await this._resolveChannel(client);
-        const bot = await client.getEntity(this.linkBot);
-        const before = Math.floor(Date.now() / 1000);
-        await client.forwardMessages(bot, { messages: [file.messageId], fromPeer: channel });
-        logger.info(`tgmovie: forwarded ${file.fileName} to @${this.linkBot}, waiting for links`);
-        const deadline = Date.now() + LINK_WAIT_MS;
+    /** Wait for one bot's reply links after a forward. */
+    async _waitForLinks(bot, botName, before) {
+        const deadline = Date.now() + PER_BOT_WAIT_MS;
         while (Date.now() < deadline) {
             await sleep(LINK_POLL_MS);
             let recent = [];
             try {
-                recent = await client.getMessages(bot, { limit: 3 });
+                recent = await this._client.getMessages(bot, { limit: 3 });
             } catch {
                 recent = [];
             }
             for (const message of recent) {
                 if ((message?.date || 0) <= before) continue;
+                const text = String(message?.message || '');
+                if (isLimitReply(text)) {
+                    logger.info(`tgmovie: @${botName} answered with a limit message`);
+                    return { links: [], limited: true };
+                }
                 const links = extractUrlsFromMessage(message);
-                const snippet = String(message?.message || '').slice(0, 120);
-                logger.info(`tgmovie: link bot replied (${message?.id}): ${links.length} link(s) — ${snippet}`);
-                if (links.length) return links;
+                if (links.length) {
+                    logger.info(`tgmovie: @${botName} replied (${message?.id}): ${links.length} link(s)`);
+                    return { links, limited: false };
+                }
+                logger.info(`tgmovie: @${botName} replied (${message?.id}) with no links yet — ${text.slice(0, 120)}`);
             }
         }
-        logger.warn(`tgmovie: no links back from @${this.linkBot} for ${file.fileName} after ${LINK_WAIT_MS / 1000}s`);
-        return [];
+        return { links: [], limited: false };
     }
 
-    /** Full flow: search, dedupe, forward each file, collect its links. */
-    async searchWithLinks(query) {
+    /**
+     * Forward one channel file to a link bot and wait for its reply links.
+     * Tries each configured bot in order until one answers; a bot that says
+     * it is throttling is skipped for a minute. Returns { links, bot }.
+     */
+    async linksForFile(file, channelEntity = null) {
+        const client = await this.ensureClient();
+        const channel = channelEntity || await this._resolveChannel(client);
+        for (const botName of this.linkBots) {
+            if (this._isLimited(botName)) continue;
+            try {
+                const bot = await client.getEntity(botName);
+                const before = Math.floor(Date.now() / 1000);
+                await client.forwardMessages(bot, { messages: [file.messageId], fromPeer: channel });
+                logger.info(`tgmovie: forwarded ${file.fileName} to @${botName}, waiting for links`);
+                const { links, limited } = await this._waitForLinks(bot, botName, before);
+                if (links.length) return { links, bot: botName };
+                if (limited) {
+                    this._markLimited(botName);
+                    continue;
+                }
+                logger.warn(`tgmovie: no links back from @${botName} for ${file.fileName} after ${PER_BOT_WAIT_MS / 1000}s — trying the next bot`);
+            } catch (err) {
+                logger.warn(`tgmovie: @${botName} failed for ${file.fileName}: ${err?.message || err}`);
+            }
+        }
+        return { links: [], bot: null };
+    }
+
+    /**
+     * Full flow: search, dedupe, forward each file, collect its links.
+     * Calls onFile({ file, links, bot }) as each file finishes, so results
+     * stream out instead of waiting for the slowest file.
+     */
+    async searchWithLinks(query, onFile = null) {
         const client = await this.ensureClient();
         const channel = await this._resolveChannel(client);
         const found = await client.getMessages(channel, { search: String(query), limit: 20 });
@@ -318,13 +382,15 @@ export class TelegramMovieService {
         logger.info(`tgmovie: search "${query}" found ${files.length} file(s) in the channel`);
         const results = [];
         for (const file of files) {
-            let links = [];
+            let entry = { file, links: [], bot: null };
             try {
-                links = await this.linksForFile(file, channel);
+                const { links, bot } = await this.linksForFile(file, channel);
+                entry = { file, links, bot };
             } catch (err) {
                 logger.warn(`Link bot forward failed for ${file.fileName}: ${err?.message || err}`);
             }
-            results.push({ file, links });
+            results.push(entry);
+            if (onFile) await onFile(entry);
             await sleep(FORWARD_GAP_MS);
         }
         return { files: results, totalFound: files.length };

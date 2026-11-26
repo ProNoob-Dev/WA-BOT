@@ -61,6 +61,8 @@ export const config = {
     TG_SESSION: process.env.TG_SESSION?.trim() || '',
     TG_MOVIE_CHANNEL: process.env.TG_MOVIE_CHANNEL?.trim() || '-1001707605233',
     TG_LINK_BOT: process.env.TG_LINK_BOT?.trim() || 'reaperfiletolinkbot',
+    /** Link bots tried in order when one throttles or stays silent. */
+    TG_LINK_BOTS: process.env.TG_LINK_BOTS?.trim() || 'reaperfiletolinkbot,PublicDirectFileToLinkBot,FileToLinkV5Bot,HyperLinkGenXBot',
     /** Phone number the Telegram login code goes to (owner's). */
     TG_LOGIN_PHONE: process.env.TG_LOGIN_PHONE?.trim() || '+918830285258',
     /** Global concurrent /movie searches (1–6). */
