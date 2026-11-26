@@ -24,7 +24,7 @@ import { config } from '../config/config.js';
 import { logger } from '../utils/logger.js';
 
 const URL_RE = /https?:\/\/[^\s)>\]]+/g;
-const LINK_WAIT_MS = 45_000;
+const LINK_WAIT_MS = 90_000;
 const LINK_POLL_MS = 3_000;
 const FORWARD_GAP_MS = 1_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -40,6 +40,27 @@ export function extractLinks(text) {
         }
     }
     return out;
+}
+
+/**
+ * Links can live in the message text, in a TextUrl entity (the visible text
+ * is just "Download"), or in an inline-keyboard button — FileToLink bots
+ * commonly answer with a button and almost no text. Check all three.
+ */
+export function extractUrlsFromMessage(message) {
+    const found = [...extractLinks(message?.message || '')];
+    for (const entity of message?.entities || []) {
+        if (entity?.className === 'MessageEntityTextUrl' && entity.url) {
+            found.push(String(entity.url));
+        }
+    }
+    const rows = message?.reply_markup?.rows || [];
+    for (const row of rows) {
+        for (const button of row?.buttons || []) {
+            if (button?.url) found.push(String(button.url));
+        }
+    }
+    return [...new Set(found)];
 }
 
 export function documentIdOf(message) {
@@ -266,6 +287,7 @@ export class TelegramMovieService {
         const bot = await client.getEntity(this.linkBot);
         const before = Math.floor(Date.now() / 1000);
         await client.forwardMessages(bot, { messages: [file.messageId], fromPeer: channel });
+        logger.info(`tgmovie: forwarded ${file.fileName} to @${this.linkBot}, waiting for links`);
         const deadline = Date.now() + LINK_WAIT_MS;
         while (Date.now() < deadline) {
             await sleep(LINK_POLL_MS);
@@ -277,10 +299,13 @@ export class TelegramMovieService {
             }
             for (const message of recent) {
                 if ((message?.date || 0) <= before) continue;
-                const links = extractLinks(message?.message || '');
+                const links = extractUrlsFromMessage(message);
+                const snippet = String(message?.message || '').slice(0, 120);
+                logger.info(`tgmovie: link bot replied (${message?.id}): ${links.length} link(s) — ${snippet}`);
                 if (links.length) return links;
             }
         }
+        logger.warn(`tgmovie: no links back from @${this.linkBot} for ${file.fileName} after ${LINK_WAIT_MS / 1000}s`);
         return [];
     }
 
@@ -290,6 +315,7 @@ export class TelegramMovieService {
         const channel = await this._resolveChannel(client);
         const found = await client.getMessages(channel, { search: String(query), limit: 20 });
         const files = mediaEntries(found);
+        logger.info(`tgmovie: search "${query}" found ${files.length} file(s) in the channel`);
         const results = [];
         for (const file of files) {
             let links = [];

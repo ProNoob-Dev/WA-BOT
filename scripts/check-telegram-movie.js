@@ -25,6 +25,7 @@ process.env.TG_API_HASH = 'test-hash-for-checks';
 const {
     TelegramMovieService,
     extractLinks,
+    extractUrlsFromMessage,
     mediaEntries,
 } = await import('../src/services/TelegramMovieService.js');
 const { findCommand } = await import('../src/commands/registry.js');
@@ -88,6 +89,34 @@ assert.deepStrictEqual(
 );
 assert.deepStrictEqual(extractLinks('no links here'), []);
 
+// Links can hide in a TextUrl entity or an inline button, not just the text.
+assert.deepStrictEqual(
+    extractUrlsFromMessage({
+        message: 'Here is your file',
+        entities: [{ className: 'MessageEntityTextUrl', url: 'https://files.example.com/x' }],
+    }),
+    ['https://files.example.com/x'],
+    'TextUrl entity links must be picked up',
+);
+assert.deepStrictEqual(
+    extractUrlsFromMessage({
+        message: 'Tap below to download',
+        reply_markup: {
+            rows: [{ buttons: [
+                { className: 'KeyboardButtonUrl', text: 'Download', url: 'https://cdn.example.com/dl/1' },
+                { className: 'KeyboardButtonUrl', text: 'Watch', url: 'https://cdn.example.com/watch/1' },
+            ] }],
+        },
+    }),
+    ['https://cdn.example.com/dl/1', 'https://cdn.example.com/watch/1'],
+    'inline button links must be picked up',
+);
+assert.deepStrictEqual(
+    extractUrlsFromMessage({ message: 'nothing here' }),
+    [],
+    'a reply with no links anywhere must yield none',
+);
+
 const entries = mediaEntries([
     msg(1, 111, 'Hanu-Man 2024 720p', 'Hanu-Man.2024.720p.mkv'),
     msg(2, 111, 'Hanu-Man 2024 720p (repost)', 'Hanu-Man.2024.720p.mkv'),
@@ -104,7 +133,8 @@ assert.strictEqual(entries[0].fileName, 'Hanu-Man.2024.720p.mkv');
 
 // 2. Service with a fake client --------------------------------------------
 const botReplies = [
-    { id: 50, date: 9999999999, message: 'Here is your file: https://reaper.example.com/dl/abc123' },
+    // Button-only reply, like the real link bot: no URL in the text itself.
+    { id: 50, date: 9999999999, message: 'Here is your file, tap below', reply_markup: { rows: [{ buttons: [{ url: 'https://reaper.example.com/dl/abc123' }] }] } },
 ];
 const client = fakeClient({ searchMessages: entries.map((e, i) => msg(i + 1, e.documentId, e.caption, e.fileName)), botReplies });
 const service = new TelegramMovieService({ createClient: () => client });
