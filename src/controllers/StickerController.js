@@ -417,7 +417,7 @@ class StickerController {
         }
     }
 
-    /** `/astk [seconds]` — first arg is the audio length, 1–10s, default 5. */
+    /** `/astk [seconds] [circle]` — audio length 1–10s, default 5; add circle/c for a round sticker. */
     _parseAudioStickerSeconds(args) {
         const n = parseInt((args || []).find((a) => /^\d+$/.test(String(a))), 10);
         if (!Number.isFinite(n)) {
