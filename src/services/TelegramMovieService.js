@@ -350,24 +350,28 @@ export class TelegramMovieService {
     }
 
     /**
-     * Shorten a long FileToLink URL (is.gd, no key needed). Falls back to the
-     * original link on any failure — a link is never lost to the shortener.
+     * Shorten a long FileToLink URL before it goes to WhatsApp. Tries ulvis
+     * first (it accepts the long plgb links is.gd times out on), then is.gd.
+     * Falls back to the original link on any failure — a link is never lost
+     * to the shortener.
      */
     async shortenUrl(url) {
         const original = String(url || '');
-        try {
-            const res = await withTimeout(
-                fetch(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(original)}`),
-                5_000,
-                'shorten link',
-            );
-            const short = String(await res.text()).trim();
-            if (/^https?:\/\/\S+$/.test(short)) {
-                logger.info(`tgmovie: shortened ${original.slice(0, 50)}… → ${short}`);
-                return short;
+        const endpoints = [
+            `https://ulvis.net/api.php?url=${encodeURIComponent(original)}`,
+            `https://is.gd/create.php?format=simple&url=${encodeURIComponent(original)}`,
+        ];
+        for (const endpoint of endpoints) {
+            try {
+                const res = await withTimeout(fetch(endpoint), 5_000, 'shorten link');
+                const short = String(await res.text()).trim();
+                if (/^https?:\/\/\S+$/.test(short)) {
+                    logger.info(`tgmovie: shortened ${original.slice(0, 50)}… → ${short}`);
+                    return short;
+                }
+            } catch (err) {
+                logger.warn(`tgmovie: shorten failed for ${original.slice(0, 50)}… (${endpoint}): ${err?.message || err}`);
             }
-        } catch (err) {
-            logger.warn(`tgmovie: shorten failed for ${original.slice(0, 50)}…: ${err?.message || err}`);
         }
         return original;
     }

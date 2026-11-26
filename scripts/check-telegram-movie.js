@@ -181,11 +181,21 @@ assert.deepStrictEqual(result.files[0].links, ['https://reaper.example.com/dl/ab
 assert.deepStrictEqual(result.files[1].links, ['https://reaper.example.com/dl/abc123']);
 
 // Shortening: a working shortener returns the short link, a failing one
-// returns the original — a link is never lost to the shortener.
+// falls through to the next, and a dead shortener returns the original —
+// a link is never lost to the shortener.
 const realFetch = globalThis.fetch;
-globalThis.fetch = async () => ({ text: async () => 'https://is.gd/abc123' });
+globalThis.fetch = async (endpoint) => ({
+    text: async () => (String(endpoint).includes('ulvis') ? 'https://ulvis.net/abc123' : 'https://is.gd/abc123'),
+});
 assert.strictEqual(
     await service.shortenUrl('https://plgb.koyeb.app/t/dl/AAAAACXF1uBT0TMHAAAeqAA/dn5RMylJhFAZcMyrODSaXL50fgRKjayjS_j4rzWQaUY'),
+    'https://ulvis.net/abc123',
+);
+globalThis.fetch = async (endpoint) => ({
+    text: async () => (String(endpoint).includes('ulvis') ? 'Error: Domain not allowed' : 'https://is.gd/abc123'),
+});
+assert.strictEqual(
+    await service.shortenUrl('https://f2l.reaperzclub.dpdns.org/xp169s9?hash=AgADph&dl=1'),
     'https://is.gd/abc123',
 );
 globalThis.fetch = async () => { throw new Error('no network'); };
