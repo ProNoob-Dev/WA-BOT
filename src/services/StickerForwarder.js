@@ -46,6 +46,8 @@ class StickerForwarder {
      * @param {object} opts
      * @param {import('../models/GroupManager.js').default} [opts.groupManager]
      * @param {string[]} [opts.envTargetGroups]
+     * @param {string} [opts.packName]
+     * @param {string} [opts.packAuthor]
      * @param {string[]} [opts.sourceChannels]
      * @param {number} [opts.concurrency]
      * @param {number} [opts.interSendDelayMs]
@@ -55,6 +57,8 @@ class StickerForwarder {
         this.envTargetGroups = opts.envTargetGroups || [];
         this.sourceChannels = opts.sourceChannels || [];
         this.resolvedChannelNames = new Map();
+        this.packName = opts.packName || '';
+        this.packAuthor = opts.packAuthor || '';
 
         this.maxWorkers = Math.max(1, Math.min(8, Number(opts.concurrency) || 3));
         this.interSendDelayMs = Math.max(50, Number(opts.interSendDelayMs) || 150);
@@ -380,10 +384,38 @@ class StickerForwarder {
             }
         }
 
-        // Forward the sticker exactly as posted — re-packing it would
-        // replace the original pack/author metadata with ours.
-        // (Sound stickers already skip the re-pack for the same reason:
-        // it would drop the audio sidecar.)
+        if (!audioBuffer) {
+            try {
+                const { Sticker } = await import('wa-sticker-formatter');
+                const sticker = new Sticker(buffer, {
+                    pack: this.packName,
+                    author: this.packAuthor,
+                    type: 'default',
+                    quality: 50,
+                });
+                const repacked = await sticker.toBuffer();
+                if (isValidWebpBuffer(repacked)) {
+                    stickerBuffer = repacked;
+                } else {
+                    logger.warn('Sticker re-pack produced invalid WebP, sending original');
+                }
+            } catch (formatError) {
+                logger.warn(`Sticker re-pack failed, sending original: ${formatError.message}`);
+            }
+        } else {
+            // Sound sticker: stamp our metadata with an EXIF injection
+            // instead of a re-pack, so the audio sidecar survives.
+            try {
+                const WSF = (await import('wa-sticker-formatter')).default;
+                const exif = new WSF.Exif({ pack: this.packName, author: this.packAuthor });
+                const stamped = await exif.add(buffer);
+                if (isValidWebpBuffer(stamped)) {
+                    stickerBuffer = stamped;
+                }
+            } catch (metaErr) {
+                logger.warn(`Sound sticker metadata stamp failed, forwarding original: ${metaErr?.message || metaErr}`);
+            }
+        }
 
         const results = await Promise.allSettled(
             targetGroups.map((targetGroup) =>

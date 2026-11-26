@@ -342,6 +342,8 @@ class WhatsAppCourseBot {
             this.stickerForwarder = new StickerForwarder({
                 groupManager: this.groupManager,
                 envTargetGroups: config.STICKER_TARGET_GROUPS,
+                packName: config.STICKER_PACK_NAME,
+                packAuthor: config.STICKER_PACK_AUTHOR,
                 sourceChannels: config.STICKER_SOURCE_CHANNELS,
                 concurrency: config.STICKER_FORWARD_CONCURRENCY,
                 interSendDelayMs: config.STICKER_INTER_SEND_DELAY_MS,
