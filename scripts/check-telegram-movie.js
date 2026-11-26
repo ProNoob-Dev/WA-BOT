@@ -224,6 +224,10 @@ assert.strictEqual(streamed[0].bot, 'reaperfiletolinkbot');
 assert.strictEqual(streamed[1].bot, 'PublicDirectFileToLinkBot', 'throttled bot must fall through to the next one');
 assert.deepStrictEqual(streamed[1].links, ['https://public.example.com/dl/xyz789']);
 assert.strictEqual(fallbackClient.calls.forwards.length, 3, 'file 1 -> bot 1, file 2 -> bot 1 (limited) -> bot 2');
+assert.ok(
+    (fallbackService._limitedUntil.get('reaperfiletolinkbot') || 0) > Date.now() + 100_000,
+    'a throttled bot must stay out for the 2-minute cooldown',
+);
 const allLinks = fallbackResult.files.flatMap((f) => f.links);
 assert.strictEqual(new Set(allLinks).size, allLinks.length, 'no link may be sent twice');
 

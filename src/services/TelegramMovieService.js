@@ -32,7 +32,7 @@ import { logger } from '../utils/logger.js';
 const URL_RE = /https?:\/\/[^\s)>\]]+/g;
 const LINK_POLL_MS = 3_000;
 const PER_BOT_WAIT_MS = 30_000;
-const LIMIT_COOLDOWN_MS = 60_000;
+const LIMIT_COOLDOWN_MS = 120_000;
 const FORWARD_GAP_MS = 1_000;
 const LIMIT_RE = /limit|flood|too many|try again later|per minute|rate limit|slow down|only \d+ links?|links?\s*\/\s*min/i;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
