@@ -34,7 +34,7 @@ const LINK_POLL_MS = 3_000;
 const PER_BOT_WAIT_MS = 30_000;
 const LIMIT_COOLDOWN_MS = 60_000;
 const FORWARD_GAP_MS = 1_000;
-const LIMIT_RE = /limit|flood|too many|try again later|per minute|rate limit|slow down/i;
+const LIMIT_RE = /limit|flood|too many|try again later|per minute|rate limit|slow down|only \d+ links?|links?\s*\/\s*min/i;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Reject if the promise does not settle in time — no Telegram call may hang a run forever. */
@@ -87,7 +87,34 @@ export function extractUrlsFromMessage(message) {
     return [...new Set(found)];
 }
 
-export function documentIdOf(message) {
+export function qualityOf(fileName) {
+    const m = String(fileName || '').match(/\b(2160p|1440p|1080p|720p|480p|360p|4k)\b/i);
+    return m ? m[1].toLowerCase().replace('4k', '2160p') : null;
+}
+
+function episodeOf(fileName) {
+    const m = String(fileName || '').match(/\bS\d{1,2}E\d{1,2}\b|\bE\d{1,2}\b|\bEpisode\s*\d+\b|\bPart\s*\d+\b/i);
+    return m ? m[0].toLowerCase() : '';
+}
+
+/**
+ * One file per quality — the same movie posted as 720p HDR, 720p 10-bit and
+ * 720p HEVC is the same thing to the user. Series episodes and movie parts
+ * keep their own slot, and files with no resolution in the name pass through.
+ */
+export function pickOnePerQuality(files) {
+    const seen = new Set();
+    return files.filter((file) => {
+        const quality = qualityOf(file.fileName);
+        if (!quality) return true;
+        const key = `${quality}|${episodeOf(file.fileName)}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function documentIdOf(message) {
     const id = message?.media?.document?.id;
     return id === undefined || id === null ? null : String(id);
 }
@@ -389,16 +416,18 @@ export class TelegramMovieService {
     }
 
     /**
-     * Full flow: search, dedupe, forward each file, collect its links.
-     * Calls onFile({ file, links, bot }) as each file finishes, so results
+     * Full flow: search, dedupe, keep one file per quality, forward each
+     * file, collect its links. Calls onFile(entry, index, total) as each
+     * file finishes and onFound(total) right after the search, so results
      * stream out instead of waiting for the slowest file.
      */
-    async searchWithLinks(query, onFile = null) {
+    async searchWithLinks(query, onFile = null, onFound = null) {
         const client = await this.ensureClient();
         const channel = await this._resolveChannel(client);
         const found = await client.getMessages(channel, { search: String(query), limit: 20 });
-        const files = mediaEntries(found);
+        const files = pickOnePerQuality(mediaEntries(found));
         logger.info(`tgmovie: search "${query}" found ${files.length} file(s) in the channel`);
+        if (files.length && onFound) await onFound(files.length);
         const results = [];
         for (const [index, file] of files.entries()) {
             logger.info(`tgmovie: fetching links for file ${index + 1}/${files.length}: ${file.fileName}`);
@@ -410,7 +439,7 @@ export class TelegramMovieService {
                 logger.warn(`Link bot forward failed for ${file.fileName}: ${err?.message || err}`);
             }
             results.push(entry);
-            if (onFile) await onFile(entry);
+            if (onFile) await onFile(entry, index, files.length);
             logger.info(`tgmovie: file ${index + 1}/${files.length} done (${entry.links.length} link(s))`);
             await sleep(FORWARD_GAP_MS);
         }

@@ -28,6 +28,7 @@ const {
     extractUrlsFromMessage,
     isLimitReply,
     mediaEntries,
+    pickOnePerQuality,
 } = await import('../src/services/TelegramMovieService.js');
 const { findCommand } = await import('../src/commands/registry.js');
 const { COMMAND_HANDLERS } = await import('../src/controllers/CommandController.js');
@@ -145,8 +146,23 @@ assert.strictEqual(entries[0].fileName, 'Hanu-Man.2024.720p.mkv');
 // 2. Service with a fake client --------------------------------------------
 // Limit detection: a throttling reply counts, a plain "please wait" does not.
 assert.strictEqual(isLimitReply('Sorry, you have reached the limit of 2 links per minute'), true);
+assert.strictEqual(isLimitReply('You can generate only 2 Links / Min'), true);
 assert.strictEqual(isLimitReply('Please wait, generating your link'), false);
 assert.strictEqual(isLimitReply('Here is your file'), false);
+
+// One file per quality: the same movie in 720p HDR / 10-bit / HEVC is one file.
+const qualityFiles = [
+    { fileName: 'Avengers Endgame Encore (2026) 720p HDR.mkv', messageId: 1, documentId: 201 },
+    { fileName: 'Avengers Endgame Encore (2026) 720p 10b.mkv', messageId: 2, documentId: 202 },
+    { fileName: 'Avengers Endgame Encore (2026) 720p HEV.mkv', messageId: 3, documentId: 203 },
+    { fileName: 'Avengers Endgame Encore (2026) 1080p HD.mkv', messageId: 4, documentId: 204 },
+    { fileName: 'Avengers Endgame Encore (2026) 480p.mkv', messageId: 5, documentId: 205 },
+    { fileName: 'Some Series S01E01 720p.mkv', messageId: 6, documentId: 206 },
+    { fileName: 'Some Series S01E02 720p.mkv', messageId: 7, documentId: 207 },
+];
+const picked = pickOnePerQuality(qualityFiles);
+assert.deepStrictEqual(picked.map((f) => f.documentId), [201, 204, 205, 206, 207],
+    'one file per quality; episodes keep their own slot');
 
 const searchMsgs = entries.map((e, i) => msg(i + 1, e.documentId, e.caption, e.fileName));
 const client = fakeClient({
@@ -219,7 +235,8 @@ const allSent = sent.map((s) => s.text).join('\n');
 assert.ok(allSent.includes('Hanu-Man.2024.720p.mkv'), 'reply must list the 720p file');
 assert.ok(allSent.includes('Hanu-Man.2024.1080p.mkv'), 'reply must list the 1080p file');
 assert.ok(allSent.includes('https://reaper.example.com/dl/abc123'), 'reply must include the link bot links');
-assert.ok(/Done — 2\/2 files with links/.test(sent.at(-1)?.text || ''), 'last message must be the done line');
+assert.ok(allSent.includes('Searching Universe Database for *Hanuman*'), 'first message must name Universe Database');
+assert.ok(/Sent all links/.test(sent.at(-1)?.text || ''), 'last message must say all links were sent');
 
 const sent2 = [];
 const sock2 = {

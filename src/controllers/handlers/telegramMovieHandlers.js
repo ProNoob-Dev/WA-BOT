@@ -5,13 +5,18 @@
  */
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config/config.js';
-import { safeSendMessage } from '../../utils/waMessage.js';
+import { safeSendMessage, editMessageText } from '../../utils/waMessage.js';
 
 const OWNER_PHONE = String(config.TG_LOGIN_PHONE || '+918830285258').trim();
 
 /** Queued send with a timeout — a raw socket send that hangs must never stall a run. */
 function send(sock, chatId, text, originalMsg = null) {
     return safeSendMessage(sock, chatId, { text }, originalMsg || null);
+}
+
+/** Edit the progress message in place; a failed edit just skips that update. */
+function updateProgress(sock, chatId, key, text) {
+    return editMessageText(sock, chatId, key, text, { fallback: false });
 }
 
 export async function handleTgLink(sock, chatId, senderJid, ctx, originalMsg = null) {
@@ -71,32 +76,47 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
         await send(sock, chatId, '🎬 Usage: `/tgmovie <movie or series name>`\n\nExample: `/tgmovie Hanuman`', originalMsg);
         return;
     }
-    await send(sock, chatId, `🔍 Searching your Telegram channel for *${query}*…`, originalMsg);
+    const progress = await send(sock, chatId, `🔍 Searching Universe Database for *${query}*…`, originalMsg);
+    const progressKey = progress?.key || null;
+    const progressText = (total, linked) =>
+        `📂 Found ${total} file${total > 1 ? 's' : ''} in Universe Database\n🔗 Links sent: ${linked}/${total}`;
     let result;
     let sentCount = 0;
     let withLinks = 0;
     try {
-        result = await service.searchWithLinks(query, async ({ file, links, bot }) => {
+        result = await service.searchWithLinks(query, async ({ file, links, bot }, _index, total) => {
             sentCount += 1;
             if (links.length) withLinks += 1;
             const lines = [`📁 *${file.fileName}*`];
             if (links.length) lines.push(...links.map((u) => `🔗 ${u}`));
             else lines.push('_No link back yet — every link bot was busy or silent. Try again in a bit._');
             await send(sock, chatId, lines.join('\n'), originalMsg);
+            if (progressKey) await updateProgress(sock, chatId, progressKey, progressText(total, withLinks));
+        }, async (total) => {
+            if (progressKey) {
+                await updateProgress(sock, chatId, progressKey,
+                    `📂 Found ${total} file${total > 1 ? 's' : ''} in Universe Database — sending links…`);
+            }
         });
     } catch (err) {
         logger.warn(`tgmovie search failed for "${query}": ${err?.message || err}`);
         const hint = /not logged in/i.test(String(err?.message || err))
             ? '\n\nRun `/tglink` first (owner only).'
             : '';
-        await send(sock, chatId, `❌ Search failed: ${err?.message || err}${hint}`, originalMsg);
+        const text = `❌ Search failed: ${err?.message || err}${hint}`;
+        if (progressKey) await updateProgress(sock, chatId, progressKey, text);
+        else await send(sock, chatId, text, originalMsg);
         return;
     }
     if (!result.files.length) {
-        await send(sock, chatId, `❌ Nothing found for *${query}* in your Telegram channel.`, originalMsg);
+        const text = `❌ Nothing found for *${query}* in Universe Database.`;
+        if (progressKey) await updateProgress(sock, chatId, progressKey, text);
+        else await send(sock, chatId, text, originalMsg);
         return;
     }
-    if (sentCount) {
-        await send(sock, chatId, `✅ Done — ${withLinks}/${result.files.length} file${result.files.length > 1 ? 's' : ''} with links.`, originalMsg);
+    if (withLinks === result.files.length) {
+        await send(sock, chatId, '✅ Sent all links.', originalMsg);
+    } else {
+        await send(sock, chatId, `⚠️ Sent ${withLinks} of ${result.files.length} links — the rest had no link yet. Try again in a bit.`, originalMsg);
     }
 }
