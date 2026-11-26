@@ -207,36 +207,49 @@ class StickerController {
             return;
         }
 
-        const circleFilter = [
-            "crop=w='min(iw,ih)':h='min(iw,ih)'",
-            'scale=512:512',
-            'format=rgba',
-            "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-(W/2),Y-(H/2)),W/2-2),255,0)'",
-            'fps=15',
-        ].join(',');
+        // Same 500KB cap as the crop path — the old fixed 9s/15fps render of
+        // a busy clip came out at ~1MB, so the image never showed. First
+        // attempt keeps 9s/15fps, step down only if the file is still too big.
+        const attempts = [
+            { fps: 15, seconds: 9 },
+            { fps: 10, seconds: 6 },
+            { fps: 8, seconds: 5 },
+        ];
+        for (const { fps, seconds } of attempts) {
+            const circleFilter = [
+                "crop=w='min(iw,ih)':h='min(iw,ih)'",
+                'scale=512:512',
+                'format=rgba',
+                "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-(W/2),Y-(H/2)),W/2-2),255,0)'",
+                `fps=${fps}`,
+            ].join(',');
 
-        const ffmpeg = await getFfmpeg();
-        const command = ffmpeg(mediaPath);
-        if (/\.gif$/i.test(mediaPath)) {
-            command.inputOptions(['-ignore_loop', '0']);
+            const ffmpeg = await getFfmpeg();
+            const command = ffmpeg(mediaPath);
+            if (/\.gif$/i.test(mediaPath)) {
+                command.inputOptions(['-ignore_loop', '0']);
+            }
+
+            await this._enqueueFfmpeg(() => this._runFfmpeg(
+                command
+                    .addOutputOptions([
+                        '-vcodec', 'libwebp',
+                        '-vf', circleFilter,
+                        '-loop', '0',
+                        '-ss', '00:00:00.0',
+                        '-t', `00:00:0${seconds}.0`,
+                        '-preset', 'default',
+                        '-an',
+                        '-fps_mode', 'passthrough',
+                        '-threads', '0',
+                    ])
+                    .toFormat('webp')
+                    .save(outputPath)
+            ));
+            if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 480 * 1024) {
+                break;
+            }
         }
-
-        await this._enqueueFfmpeg(() => this._runFfmpeg(
-            command
-                .addOutputOptions([
-                    '-vcodec', 'libwebp',
-                    '-vf', circleFilter,
-                    '-loop', '0',
-                    '-ss', '00:00:00.0',
-                    '-t', '00:00:09.0',
-                    '-preset', 'default',
-                    '-an',
-                    '-fps_mode', 'passthrough',
-                    '-threads', '0',
-                ])
-                .toFormat('webp')
-                .save(outputPath)
-        ));
     }
 
     async _renderStandardSticker(mediaPath, outputPath, shape) {
@@ -406,7 +419,7 @@ class StickerController {
 
     /** `/astk [seconds]` — first arg is the audio length, 1–10s, default 5. */
     _parseAudioStickerSeconds(args) {
-        const n = parseInt(args?.[0], 10);
+        const n = parseInt((args || []).find((a) => /^\d+$/.test(String(a))), 10);
         if (!Number.isFinite(n)) {
             return 5;
         }
@@ -476,7 +489,7 @@ class StickerController {
             const messageType = Object.keys(normalized)[0];
             if (messageType !== 'videoMessage') {
                 await sock.sendMessage(chatId, {
-                    text: '❌ Please reply to a video with sound (max 60 seconds).\n\n💡 _Usage: reply to a video with_ `/astk` _or_ `/astk 7` _for 7 seconds of audio._',
+                    text: '❌ Please reply to a video with sound (max 60 seconds).\n\n💡 _Usage: reply to a video with_ `/astk` _or_ `/astk 7` _for 7 seconds of audio, add_ `circle` _for a round sticker._',
                 });
                 return;
             }
@@ -489,6 +502,7 @@ class StickerController {
             }
 
             const seconds = this._parseAudioStickerSeconds(args);
+            const shape = this._parseStickerShape(args);
             const mediaPath = this._generateTempFileName('.mp4');
 
             try {
@@ -514,7 +528,11 @@ class StickerController {
                 const stickerPath = this._generateTempFileName('.webp');
                 const audioPath = this._generateTempFileName('.ogg');
                 try {
-                    await this._renderStandardSticker(mediaPath, stickerPath, 'crop');
+                    if (shape === 'circle') {
+                        await this._renderCircleSticker(mediaPath, stickerPath, { animated: true });
+                    } else {
+                        await this._renderStandardSticker(mediaPath, stickerPath, 'crop');
+                    }
                     await this._extractAudioClip(mediaPath, audioPath, seconds);
 
                     const webpBuffer = fs.readFileSync(stickerPath);

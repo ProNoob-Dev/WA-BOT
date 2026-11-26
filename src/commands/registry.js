@@ -99,7 +99,7 @@ export const COMMAND_REGISTRY = [
         key: 'astk',
         scope: 'any',
         role: 'anyone',
-        help: 'Audio sticker from a video — reply to a video, sound plays on tap (options: seconds 1-10, default 5)',
+        help: 'Audio sticker from a video — reply to a video, sound plays on tap (options: seconds 1-10, default 5, circle/c)',
     },
     {
         names: ['/steal'],

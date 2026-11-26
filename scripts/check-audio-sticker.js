@@ -121,6 +121,11 @@ assert.strictEqual(controller._parseAudioStickerSeconds(['7']), 7);
 assert.strictEqual(controller._parseAudioStickerSeconds(['99']), 10);
 assert.strictEqual(controller._parseAudioStickerSeconds(['0']), 1);
 assert.strictEqual(controller._parseAudioStickerSeconds(['nope']), 5);
+assert.strictEqual(controller._parseAudioStickerSeconds(['circle', '7']), 7);
+assert.strictEqual(controller._parseAudioStickerSeconds(['7', 'circle']), 7);
+assert.strictEqual(controller._parseStickerShape(['circle']), 'circle');
+assert.strictEqual(controller._parseStickerShape(['c']), 'circle');
+assert.strictEqual(controller._parseStickerShape([]), 'default');
 
 // ── 4. send path (mocked socket, no network) ────────────────────────────────
 const webp1x1 = Buffer.from(
@@ -242,6 +247,18 @@ if (!fs.existsSync(danceClip)) {
         const meta = await sharp(webp).metadata();
         assert.strictEqual(meta.width, 512);
         assert.strictEqual(meta.height, 512);
+
+        // circle audio sticker: same clip, round mask, still 512x512 animated
+        const circlePath = path.join(tmp, 'circle.webp');
+        await controller._renderCircleSticker(danceClip, circlePath, { animated: true });
+        const circleWebp = fs.readFileSync(circlePath);
+        assert.ok(isValidWebpBuffer(circleWebp), 'circle sticker must be WebP');
+        assert.ok(circleWebp.includes(Buffer.from('ANIM')), 'circle sticker must be animated');
+        const circleMeta = await sharp(circleWebp).metadata();
+        assert.strictEqual(circleMeta.width, 512);
+        assert.strictEqual(circleMeta.height, 512);
+        console.log(`circle render on test clip: ${circleWebp.length} bytes (500KB cap)`);
+        assert.ok(circleWebp.length <= 480 * 1024, `circle sticker must fit WhatsApp's 500KB cap, got ${circleWebp.length}`);
 
         await controller._extractAudioClip(danceClip, audioPath, 5);
         const ogg = fs.readFileSync(audioPath);
