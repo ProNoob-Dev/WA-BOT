@@ -47,6 +47,7 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.35.1",
     "snapsave-media-downloader": "^2.4.0",
+    "telegram": "^2.22.2",
     "wa-sticker-formatter": "^4.4.4",
     "word-extractor": "^1.0.4"
   }

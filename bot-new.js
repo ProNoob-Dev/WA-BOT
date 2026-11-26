@@ -26,6 +26,7 @@ import { startNewsScheduler } from './src/utils/newsScheduler.js';
 import { startGithubScheduler } from './src/utils/githubScheduler.js';
 import { startAwesomeScheduler } from './src/utils/awesomeScheduler.js';
 import MovieController from './src/controllers/MovieController.js';
+import { TelegramMovieService } from './src/services/TelegramMovieService.js';
 import GitHubTrendingController from './src/controllers/GitHubTrendingController.js';
 import GitHubTrendingDatabase from './src/models/GitHubTrendingDatabase.js';
 import AwesomeListsController from './src/controllers/AwesomeListsController.js';
@@ -255,6 +256,9 @@ class WhatsAppCourseBot {
             this.movieController = new MovieController(mongoDb, this.groupManager);
             await this.movieController.init();
 
+            // Telegram movie search — lazy gramJS user client (logs in via /tglink).
+            this.telegramMovieService = new TelegramMovieService();
+
             // Self-ping: hit our own public URL so free-tier hosts (Koyeb/Render)
             // see inbound traffic and never scale the instance to zero.
             this._startSelfPing();
@@ -308,7 +312,8 @@ class WhatsAppCourseBot {
                 this.warnDatabase,
                 this.authDatabase,
                 this.courseAPI,
-                this.awesomeListsController
+                this.awesomeListsController,
+                this.telegramMovieService
             );
             this.commandController.setInterviewQuestionService(this.interviewQuestionService);
             this.commandController.setBanDatabase(this.banDatabase);

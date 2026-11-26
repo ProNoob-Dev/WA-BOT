@@ -72,6 +72,22 @@ export const COMMAND_REGISTRY = [
         category: 'movie',
     },
     {
+        names: ['/tgmovie', '/tm'],
+        key: 'tgmovie',
+        scope: 'any',
+        role: 'anyone',
+        help: 'Search your Telegram movie channel — `/tgmovie <name>`, links back from the link bot',
+        category: 'movie',
+    },
+    {
+        names: ['/tglink'],
+        key: 'tglink',
+        scope: 'any',
+        role: 'owner',
+        help: 'One-time Telegram login for the movie search (owner only)',
+        category: 'movie',
+    },
+    {
         names: ['/upcoming'],
         key: 'upcoming',
         scope: 'any',
@@ -970,7 +986,7 @@ export const HELP_CATEGORY = {
     checklimit: 'core', viewonce: 'core',
 
     // Movies
-    movie: 'movie', upcoming: 'movie', genre: 'movie',
+    movie: 'movie', upcoming: 'movie', genre: 'movie', tgmovie: 'movie', tglink: 'movie',
 
     // Media download / convert
     bypass: 'movie',

@@ -54,6 +54,15 @@ export const config = {
     SELF_PING_INTERVAL_MS: Math.max(60_000, parseInt(process.env.SELF_PING_INTERVAL_MS, 10) || 4 * 60_000),
     /** Free-tier /movie searches per user per day (default 3). */
     MOVIE_DAILY_LIMIT: Math.max(1, parseInt(process.env.MOVIE_DAILY_LIMIT, 10) || 3),
+    /** Telegram movie search (gramJS user client): app credentials for the
+     * one-time login, saved session, source channel and link bot. */
+    TG_API_ID: process.env.TG_API_ID?.trim() || '',
+    TG_API_HASH: process.env.TG_API_HASH?.trim() || '',
+    TG_SESSION: process.env.TG_SESSION?.trim() || '',
+    TG_MOVIE_CHANNEL: process.env.TG_MOVIE_CHANNEL?.trim() || '-1001707605233',
+    TG_LINK_BOT: process.env.TG_LINK_BOT?.trim() || 'reaperfiletolinkbot',
+    /** Phone number the Telegram login code goes to (owner's). */
+    TG_LOGIN_PHONE: process.env.TG_LOGIN_PHONE?.trim() || '+918830285258',
     /** Global concurrent /movie searches (1–6). */
     MOVIE_SEARCH_MAX: Math.max(1, Math.min(6, parseInt(process.env.MOVIE_SEARCH_MAX, 10) || 4)),
     /** Redis URL enables BullMQ job driver (Phase 3). */

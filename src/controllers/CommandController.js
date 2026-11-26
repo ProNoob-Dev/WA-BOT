@@ -120,6 +120,11 @@ import { handleViewOnce } from './handlers/viewOnceHandler.js';
 import { handleDeploy } from './handlers/deployHandler.js';
 import { handleCmdLog } from './handlers/cmdlogHandler.js';
 import {
+    handleTgLink,
+    handleTgMovie,
+    handlePendingTelegramInput,
+} from './handlers/telegramMovieHandlers.js';
+import {
     handleWarn,
     handleMyWarns,
     handleWarns,
@@ -847,6 +852,18 @@ export const COMMAND_HANDLERS = {
                 logger.error(`Movie search handler error: ${err?.message || err}`);
             });
     },
+    tgmovie: ({ sock, chatId, senderJid, args, originalMsg, ctx }) => {
+        void handleTgMovie(sock, chatId, senderJid, args, ctx, originalMsg)
+            .catch((err) => {
+                logger.error(`tgmovie handler error: ${err?.message || err}`);
+            });
+    },
+    tglink: ({ sock, chatId, senderJid, originalMsg, ctx }) => {
+        void handleTgLink(sock, chatId, senderJid, ctx, originalMsg)
+            .catch((err) => {
+                logger.error(`tglink handler error: ${err?.message || err}`);
+            });
+    },
     upcoming: ({ sock, chatId, senderJid, originalMsg, ctx }) => {
         if (!ctx.movieController) {
             return safeSendMessage(sock, chatId, { text: '⚠️ Movie features not available.' }, originalMsg);
@@ -1002,12 +1019,13 @@ export const COMMAND_HANDLERS = {
 };
 
 class CommandController {
-    constructor(database, botState, groupManager, newsController = null, movieController = null, userManager = null, stickerController = null, botSettings = null, githubTrendingController = null, warnDatabase = null, authDatabase = null, courseAPI = null, awesomeListsController = null) {
+    constructor(database, botState, groupManager, newsController = null, movieController = null, userManager = null, stickerController = null, botSettings = null, githubTrendingController = null, warnDatabase = null, authDatabase = null, courseAPI = null, awesomeListsController = null, telegramMovieService = null) {
         this.database = database;
         this.botState = botState;
         this.groupManager = groupManager;
         this.newsController = newsController;
         this.movieController = movieController;
+        this.telegramMovieService = telegramMovieService;
         this.userManager = userManager;
         this.stickerController = stickerController;
         this.botSettings = botSettings;
@@ -1156,6 +1174,7 @@ class CommandController {
             warnDatabase: this.warnDatabase,
             banDatabase: this.banDatabase,
             movieController: this.movieController,
+            telegramMovieService: this.telegramMovieService,
             userManager: this.userManager,
             stickerController: this.stickerController,
             stickerForwarder: this.stickerForwarder,
@@ -1215,6 +1234,13 @@ class CommandController {
             sock, chatId, senderJid, messageText.trim(), ctx,
         );
         if (handledAwesome) {
+            return true;
+        }
+
+        const handledTelegram = await handlePendingTelegramInput(
+            sock, chatId, senderJid, messageText.trim(), ctx, originalMsg,
+        );
+        if (handledTelegram) {
             return true;
         }
 
