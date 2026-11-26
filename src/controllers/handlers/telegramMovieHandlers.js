@@ -5,11 +5,13 @@
  */
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config/config.js';
+import { safeSendMessage } from '../../utils/waMessage.js';
 
 const OWNER_PHONE = String(config.TG_LOGIN_PHONE || '+918830285258').trim();
 
+/** Queued send with a timeout — a raw socket send that hangs must never stall a run. */
 function send(sock, chatId, text, originalMsg = null) {
-    return sock.sendMessage(chatId, { text }, originalMsg ? { quoted: originalMsg } : undefined);
+    return safeSendMessage(sock, chatId, { text }, originalMsg || null);
 }
 
 export async function handleTgLink(sock, chatId, senderJid, ctx, originalMsg = null) {

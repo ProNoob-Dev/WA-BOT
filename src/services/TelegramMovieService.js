@@ -37,6 +37,17 @@ const FORWARD_GAP_MS = 1_000;
 const LIMIT_RE = /limit|flood|too many|try again later|per minute|rate limit|slow down/i;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Reject if the promise does not settle in time — no Telegram call may hang a run forever. */
+function withTimeout(promise, ms, label) {
+    let timer = null;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+        }),
+    ]).finally(() => clearTimeout(timer));
+}
+
 /** True when a bot reply says it is throttling (not a normal "please wait"). */
 export function isLimitReply(text) {
     return LIMIT_RE.test(String(text || ''));
@@ -170,7 +181,7 @@ export class TelegramMovieService {
             throw new Error('Telegram API credentials are not set on the service (TG_API_ID / TG_API_HASH).');
         }
         const client = this._createClient(String(config.TG_SESSION || '').trim(), apiId, apiHash);
-        await client.connect();
+        await withTimeout(client.connect(), 20_000, 'Telegram connect');
         let me = null;
         try {
             me = await client.getMe();
@@ -194,13 +205,13 @@ export class TelegramMovieService {
             throw new Error('Telegram API credentials are not set on the service (TG_API_ID / TG_API_HASH).');
         }
         const client = this._createClient('', apiId, apiHash);
-        await client.connect();
-        const sent = await client.invoke(new Api.auth.SendCode({
+        await withTimeout(client.connect(), 20_000, 'Telegram connect');
+        const sent = await withTimeout(client.invoke(new Api.auth.SendCode({
             phoneNumber: phone,
             apiId,
             apiHash,
             settings: new Api.CodeSettings({}),
-        }));
+        })), 20_000, 'Telegram login code');
         this._login = {
             client, phone, phoneCodeHash: sent.phoneCodeHash,
             chatId, senderJid, requestedAt: Date.now(),
@@ -318,7 +329,11 @@ export class TelegramMovieService {
             await sleep(LINK_POLL_MS);
             let recent = [];
             try {
-                recent = await this._client.getMessages(bot, { limit: 3 });
+                recent = await withTimeout(
+                    this._client.getMessages(bot, { limit: 3 }),
+                    10_000,
+                    'link bot reply read',
+                );
             } catch {
                 recent = [];
             }
@@ -351,9 +366,13 @@ export class TelegramMovieService {
         for (const botName of this.linkBots) {
             if (this._isLimited(botName)) continue;
             try {
-                const bot = await client.getEntity(botName);
+                const bot = await withTimeout(client.getEntity(botName), 15_000, `resolve @${botName}`);
                 const before = Math.floor(Date.now() / 1000);
-                await client.forwardMessages(bot, { messages: [file.messageId], fromPeer: channel });
+                await withTimeout(
+                    client.forwardMessages(bot, { messages: [file.messageId], fromPeer: channel }),
+                    15_000,
+                    `forward to @${botName}`,
+                );
                 logger.info(`tgmovie: forwarded ${file.fileName} to @${botName}, waiting for links`);
                 const { links, limited } = await this._waitForLinks(bot, botName, before);
                 if (links.length) return { links, bot: botName };
@@ -381,7 +400,8 @@ export class TelegramMovieService {
         const files = mediaEntries(found);
         logger.info(`tgmovie: search "${query}" found ${files.length} file(s) in the channel`);
         const results = [];
-        for (const file of files) {
+        for (const [index, file] of files.entries()) {
+            logger.info(`tgmovie: fetching links for file ${index + 1}/${files.length}: ${file.fileName}`);
             let entry = { file, links: [], bot: null };
             try {
                 const { links, bot } = await this.linksForFile(file, channel);
@@ -391,6 +411,7 @@ export class TelegramMovieService {
             }
             results.push(entry);
             if (onFile) await onFile(entry);
+            logger.info(`tgmovie: file ${index + 1}/${files.length} done (${entry.links.length} link(s))`);
             await sleep(FORWARD_GAP_MS);
         }
         return { files: results, totalFound: files.length };
