@@ -111,7 +111,7 @@ export const COMMAND_REGISTRY = [
         help: 'Create sticker from image/video (reply; options: circle/c, crop, pack, author, nometadata)',
     },
     {
-        names: ['/astk'],
+        names: ['/astk', '/a'],
         key: 'astk',
         scope: 'any',
         role: 'anyone',
