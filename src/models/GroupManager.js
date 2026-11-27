@@ -216,9 +216,12 @@ class GroupManager {
             const data = await sock.groupMetadata(groupId);
             const { adminIndex, phoneByKey } = buildAdminIndex(data.participants || []);
             const entry = { data, at: Date.now(), adminIndex, phoneByKey };
-            if (this.groupMetaCache.size > 100) {
+            // 107 groups already exceeds a 100-entry cap, so the cache
+            // thrashed and groups kept re-fetching full metadata.
+            while (this.groupMetaCache.size > 500) {
                 const oldest = this.groupMetaCache.keys().next().value;
-                if (oldest !== undefined) this.groupMetaCache.delete(oldest);
+                if (oldest === undefined) break;
+                this.groupMetaCache.delete(oldest);
             }
             this.groupMetaCache.set(id, entry);
             if (groupId !== id) this.groupMetaCache.set(groupId, entry);

@@ -360,7 +360,7 @@ export async function handleInterviewQOn(sock, chatId, senderJid, { groupManager
 
         let groupName = 'Unknown Group';
         try {
-            groupName = (await sock.groupMetadata(chatId)).subject;
+            groupName = (await groupManager.getGroupMetadataCached(sock, chatId)).subject;
         } catch {
             /* ignore */
         }
@@ -405,7 +405,7 @@ export async function handleInterviewQOff(sock, chatId, senderJid, { groupManage
 
         let groupName = 'Unknown Group';
         try {
-            groupName = (await sock.groupMetadata(chatId)).subject;
+            groupName = (await groupManager.getGroupMetadataCached(sock, chatId)).subject;
         } catch {
             /* ignore */
         }

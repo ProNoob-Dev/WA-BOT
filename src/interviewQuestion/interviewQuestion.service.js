@@ -592,7 +592,9 @@ class InterviewQuestionService {
         try {
             const want = new Set(phones.map((p) => String(p).replace(/\D/g, '')).filter(Boolean));
             if (!want.size) return [];
-            const meta = await s.groupMetadata(groupId);
+            const meta = this.groupManager?.getGroupMetadataCached
+                ? await this.groupManager.getGroupMetadataCached(s, groupId)
+                : await s.groupMetadata(groupId);
             const out = [];
             for (const p of meta?.participants || []) {
                 const phone = String(p.phoneNumber || '').replace(/\D/g, '') ||

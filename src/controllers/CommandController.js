@@ -560,7 +560,7 @@ async function scalpAlertPrefs({ sock, chatId, senderJid, argStr, ctx }) {
     }
 
     let groupName = 'Unknown Group';
-    try { groupName = (await sock.groupMetadata(chatId)).subject; } catch {}
+    try { groupName = (await groupManager.getGroupMetadataCached(sock, chatId)).subject; } catch {}
     const senderPhone = extractPhoneNumber(senderJid);
 
     await groupManager.setScalpEnabled(chatId, groupName, true, senderPhone, keys.length ? keys : undefined);
@@ -961,7 +961,7 @@ export const COMMAND_HANDLERS = {
             return;
         }
         let groupName = 'Unknown Group';
-        try { groupName = (await sock.groupMetadata(chatId)).subject; } catch {}
+        try { groupName = (await groupManager.getGroupMetadataCached(sock, chatId)).subject; } catch {}
         const senderPhone = extractPhoneNumber(senderJid);
         await groupManager.setTgStickerEnabled(chatId, groupName, true, senderPhone);
         await safeSendMessage(sock, chatId, {
@@ -983,7 +983,7 @@ export const COMMAND_HANDLERS = {
             return;
         }
         let groupName = 'Unknown Group';
-        try { groupName = (await sock.groupMetadata(chatId)).subject; } catch {}
+        try { groupName = (await groupManager.getGroupMetadataCached(sock, chatId)).subject; } catch {}
         const senderPhone = extractPhoneNumber(senderJid);
         await groupManager.setTgStickerEnabled(chatId, groupName, false, senderPhone);
         await safeSendMessage(sock, chatId, {
@@ -1006,7 +1006,7 @@ export const COMMAND_HANDLERS = {
             return;
         }
         let groupName = 'Unknown Group';
-        try { groupName = (await sock.groupMetadata(chatId)).subject; } catch {}
+        try { groupName = (await groupManager.getGroupMetadataCached(sock, chatId)).subject; } catch {}
         const senderPhone = extractPhoneNumber(senderJid);
         await groupManager.setScalpEnabled(chatId, groupName, false, senderPhone);
         await safeSendMessage(sock, chatId, {

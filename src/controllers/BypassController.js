@@ -470,7 +470,7 @@ class BypassController {
             return;
         }
         let groupName = 'Unknown Group';
-        try { groupName = (await sock.groupMetadata(chatId)).subject; } catch {}
+        try { groupName = (await this.groupManager.getGroupMetadataCached(sock, chatId)).subject; } catch {}
         await this.groupManager.setBypassAuto(chatId, groupName, true, extractPhoneNumber(senderJid));
         await sendAndDelete(sock, chatId, {
             text:
@@ -501,7 +501,7 @@ class BypassController {
             return;
         }
         let groupName = 'Unknown Group';
-        try { groupName = (await sock.groupMetadata(chatId)).subject; } catch {}
+        try { groupName = (await this.groupManager.getGroupMetadataCached(sock, chatId)).subject; } catch {}
         await this.groupManager.setBypassAuto(chatId, groupName, false, extractPhoneNumber(senderJid));
         await sendAndDelete(sock, chatId, {
             text:
