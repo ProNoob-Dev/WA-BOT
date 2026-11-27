@@ -264,6 +264,9 @@ assert.ok(allSent.includes('Hanu-Man.2024.720p.mkv'), 'reply must list the 720p 
 assert.ok(allSent.includes('Hanu-Man.2024.1080p.mkv'), 'reply must list the 1080p file');
 assert.ok(allSent.includes('https://is.gd/abc123'), 'reply must include the shortened link');
 assert.ok(allSent.includes('Searching Universe Database for *Hanuman*'), 'first message must name Universe Database');
+const resultMsgs = sent.filter((s) => s.text.includes('Hanu-Man.2024.720p.mkv'));
+assert.strictEqual(resultMsgs.length, 1, 'all files must come in one combined message, not one per file');
+assert.ok(resultMsgs[0].text.includes('Hanu-Man.2024.1080p.mkv'), 'the one results message must list every file');
 assert.ok(/Sent all links/.test(sent.at(-1)?.text || ''), 'last message must say all links were sent');
 
 const sent2 = [];
