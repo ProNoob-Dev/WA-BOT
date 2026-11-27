@@ -231,6 +231,30 @@ assert.ok(
 const allLinks = fallbackResult.files.flatMap((f) => f.links);
 assert.strictEqual(new Set(allLinks).size, allLinks.length, 'no link may be sent twice');
 
+// Quality is matched in memory: the search runs on the title, so the
+// wanted quality is picked from what came back.
+const qualityClient = fakeClient({
+    searchMessages: searchMsgs,
+    botReplies: { reaperfiletolinkbot: () => [linkReply('https://reaper.example.com/dl/abc123')] },
+});
+const qualityService = new TelegramMovieService({ createClient: () => qualityClient });
+const only720 = await qualityService.searchWithLinks('Hanuman 720p', async () => {});
+assert.strictEqual(only720.files.length, 1, '720p asked and present — only the 720p file comes back');
+assert.ok(only720.files[0].file.fileName.includes('720p'));
+assert.strictEqual(only720.fellBack, false);
+
+// Wanted quality missing — the available quality comes back instead.
+const only1080Client = fakeClient({
+    searchMessages: [msg(3, 222, 'Hanu-Man 2024 1080p', 'Hanu-Man.2024.1080p.mkv')],
+    botReplies: { reaperfiletolinkbot: () => [linkReply('https://reaper.example.com/dl/abc123')] },
+});
+const only1080Service = new TelegramMovieService({ createClient: () => only1080Client });
+const fellBack = await only1080Service.searchWithLinks('Hanuman 720p', async () => {});
+assert.strictEqual(fellBack.files.length, 1, '720p asked but only 1080p exists — the 1080p file comes back');
+assert.ok(fellBack.files[0].file.fileName.includes('1080p'));
+assert.strictEqual(fellBack.fellBack, true, 'missing quality must flag the fallback');
+assert.strictEqual(fellBack.wantedQuality, '720p');
+
 // 3. Login flow --------------------------------------------------------------
 const loginClient = fakeClient();
 const loginService = new TelegramMovieService({ createClient: () => loginClient });
@@ -264,7 +288,6 @@ assert.strictEqual(fresh.length, 1, 'only one fresh message — everything else 
 assert.ok(fresh[0].text.includes('Searching Universe Database for *Hanuman 720p*'), 'first message must name Universe Database');
 const finalText = sent.at(-1)?.text || '';
 assert.ok(finalText.includes('Hanu-Man.2024.720p.mkv'), 'final message must list the 720p file');
-assert.ok(finalText.includes('Hanu-Man.2024.1080p.mkv'), 'final message must list the 1080p file');
 assert.ok(finalText.includes('https://is.gd/abc123'), 'final message must include the shortened link');
 assert.ok(/Sent all links/.test(finalText), 'final message must say all links were sent');
 
@@ -293,6 +316,22 @@ assert.strictEqual(sent3.length, 1, 'no-quality query must send exactly one repl
 assert.ok(/quality/i.test(sent3[0].text), 'reply must ask for the quality');
 assert.ok(sent3[0].text.includes('720p'), 'reply must show an example with a quality');
 assert.strictEqual(noQualityClient.calls.forwards.length, 0, 'no-quality query must not forward anything');
+
+// Missing quality at the handler level — the available file comes back
+// with a note saying the wanted quality was not found.
+const sent4 = [];
+const sock4 = {
+    async sendMessage(chatId, content) {
+        sent4.push({ chatId, text: content.text, edit: !!content.edit });
+        return { key: { id: 'x' } };
+    },
+};
+const fallbackHandlerService = new TelegramMovieService({ createClient: () => only1080Client });
+fallbackHandlerService.shortenUrl = async () => 'https://is.gd/abc123';
+await handleTgMovie(sock4, 'chat1', 'owner@lid', ['Hanuman', '720p'], { telegramMovieService: fallbackHandlerService });
+const fallbackText = sent4.at(-1)?.text || '';
+assert.ok(fallbackText.includes('Hanu-Man.2024.1080p.mkv'), 'fallback reply must list the available 1080p file');
+assert.ok(/720p not found/i.test(fallbackText), 'fallback reply must say the wanted quality was not found');
 
 const handled = await handlePendingTelegramInput(
     sock2, 'chat1', 'owner@lid', '12345', { telegramMovieService: loginService },

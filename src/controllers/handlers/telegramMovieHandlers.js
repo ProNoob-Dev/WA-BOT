@@ -99,8 +99,9 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
                 messageText += `\n${shortLinks.map((u) => `🔗 ${u}`).join('\n')}`;
             } else messageText += '\n_No link back yet — every link bot was busy or silent. Try again in a bit._';
             await refresh();
-        }, async (total) => {
-            messageText = `📂 Found ${total} file${total > 1 ? 's' : ''} in Universe Database — sending links…`;
+        }, async (total, info) => {
+            const note = info?.fellBack ? `⚠️ ${info.wantedQuality} not found — showing what's available.\n` : '';
+            messageText = `${note}📂 Found ${total} file${total > 1 ? 's' : ''} in Universe Database — sending links…`;
             await refresh();
         });
     } catch (err) {

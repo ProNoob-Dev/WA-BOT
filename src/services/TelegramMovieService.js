@@ -453,10 +453,22 @@ export class TelegramMovieService {
     async searchWithLinks(query, onFile = null, onFound = null) {
         const client = await this.ensureClient();
         const channel = await this._resolveChannel(client);
-        const found = await client.getMessages(channel, { search: String(query), limit: 20 });
-        const files = pickOnePerQuality(mediaEntries(found));
-        logger.info(`tgmovie: search "${query}" found ${files.length} file(s) in the channel`);
-        if (files.length && onFound) await onFound(files.length);
+        // Search by title only and match the quality in memory: when the
+        // wanted quality is not in the channel, the available ones come
+        // back instead of nothing.
+        const wanted = String(query).match(QUALITY_RE)?.[1]?.toLowerCase().replace('4k', '2160p') || null;
+        let titleQuery = wanted ? String(query).replace(QUALITY_RE, '').replace(/\s+/g, ' ').trim() : String(query);
+        if (!titleQuery) titleQuery = String(query);
+        const found = await client.getMessages(channel, { search: titleQuery, limit: 20 });
+        let files = pickOnePerQuality(mediaEntries(found));
+        let fellBack = false;
+        if (wanted) {
+            const matching = files.filter((f) => qualityOf(f.fileName) === wanted);
+            if (matching.length) files = matching;
+            else if (files.length) fellBack = true;
+        }
+        logger.info(`tgmovie: search "${query}" found ${files.length} file(s) in the channel${fellBack ? ` (no ${wanted} — showing available)` : ''}`);
+        if (files.length && onFound) await onFound(files.length, { fellBack, wantedQuality: wanted });
         const results = [];
         for (const [index, file] of files.entries()) {
             logger.info(`tgmovie: fetching links for file ${index + 1}/${files.length}: ${file.fileName}`);
@@ -472,7 +484,7 @@ export class TelegramMovieService {
             logger.info(`tgmovie: file ${index + 1}/${files.length} done (${entry.links.length} link(s))`);
             await sleep(FORWARD_GAP_MS);
         }
-        return { files: results, totalFound: files.length };
+        return { files: results, totalFound: files.length, fellBack, wantedQuality: wanted };
     }
 }
 
