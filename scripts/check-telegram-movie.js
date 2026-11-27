@@ -258,10 +258,10 @@ const sock = {
     },
 };
 service.shortenUrl = async () => 'https://is.gd/abc123';
-await handleTgMovie(sock, 'chat1', 'owner@lid', ['Hanuman'], { telegramMovieService: service });
+await handleTgMovie(sock, 'chat1', 'owner@lid', ['Hanuman', '720p'], { telegramMovieService: service });
 const fresh = sent.filter((s) => !s.edit);
 assert.strictEqual(fresh.length, 1, 'only one fresh message — everything else must be an edit of it');
-assert.ok(fresh[0].text.includes('Searching Universe Database for *Hanuman*'), 'first message must name Universe Database');
+assert.ok(fresh[0].text.includes('Searching Universe Database for *Hanuman 720p*'), 'first message must name Universe Database');
 const finalText = sent.at(-1)?.text || '';
 assert.ok(finalText.includes('Hanu-Man.2024.720p.mkv'), 'final message must list the 720p file');
 assert.ok(finalText.includes('Hanu-Man.2024.1080p.mkv'), 'final message must list the 1080p file');
@@ -277,6 +277,22 @@ const sock2 = {
 };
 await handleTgMovie(sock2, 'chat1', 'owner@lid', [], { telegramMovieService: service });
 assert.ok(/Usage: `\/tgmovie/.test(sent2.at(-1)?.text || ''), 'no query must show usage');
+
+// A query with no quality must not search — it asks for the quality instead.
+const sent3 = [];
+const sock3 = {
+    async sendMessage(chatId, content) {
+        sent3.push({ chatId, text: content.text, edit: !!content.edit });
+        return { key: { id: 'x' } };
+    },
+};
+const noQualityClient = fakeClient({ searchMessages: searchMsgs });
+const noQualityService = new TelegramMovieService({ createClient: () => noQualityClient });
+await handleTgMovie(sock3, 'chat1', 'owner@lid', ['Lucifer', 'S01'], { telegramMovieService: noQualityService });
+assert.strictEqual(sent3.length, 1, 'no-quality query must send exactly one reply');
+assert.ok(/quality/i.test(sent3[0].text), 'reply must ask for the quality');
+assert.ok(sent3[0].text.includes('720p'), 'reply must show an example with a quality');
+assert.strictEqual(noQualityClient.calls.forwards.length, 0, 'no-quality query must not forward anything');
 
 const handled = await handlePendingTelegramInput(
     sock2, 'chat1', 'owner@lid', '12345', { telegramMovieService: loginService },

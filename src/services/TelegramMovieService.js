@@ -35,6 +35,8 @@ const PER_BOT_WAIT_MS = 60_000;
 const LIMIT_COOLDOWN_MS = 120_000;
 const FORWARD_GAP_MS = 1_000;
 const LIMIT_RE = /limit|flood|too many|try again later|per minute|rate limit|slow down|only \d+ links?|links?\s*\/\s*min/i;
+/** A quality token — a search query must carry one, for movies and series alike. */
+export const QUALITY_RE = /\b(2160p|1440p|1080p|720p|480p|360p|4k)\b/i;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Reject if the promise does not settle in time — no Telegram call may hang a run forever. */
@@ -88,7 +90,7 @@ export function extractUrlsFromMessage(message) {
 }
 
 export function qualityOf(fileName) {
-    const m = String(fileName || '').match(/\b(2160p|1440p|1080p|720p|480p|360p|4k)\b/i);
+    const m = String(fileName || '').match(QUALITY_RE);
     return m ? m[1].toLowerCase().replace('4k', '2160p') : null;
 }
 

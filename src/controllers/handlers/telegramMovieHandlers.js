@@ -5,6 +5,7 @@
  */
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config/config.js';
+import { QUALITY_RE } from '../../services/TelegramMovieService.js';
 import { safeSendMessage, editMessageText } from '../../utils/waMessage.js';
 
 const OWNER_PHONE = String(config.TG_LOGIN_PHONE || '+918830285258').trim();
@@ -74,6 +75,10 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
     const query = (args || []).join(' ').trim();
     if (!query) {
         await send(sock, chatId, '🎬 Usage: `/tgmovie <movie or series name>`\n\nExample: `/tgmovie Hanuman`', originalMsg);
+        return;
+    }
+    if (!QUALITY_RE.test(query)) {
+        await send(sock, chatId, '⚠️ Add the quality too — e.g. `/tgmovie Lucifer S01 720p`\n\nQualities: 480p, 720p, 1080p, 2160p, 4K.', originalMsg);
         return;
     }
     const progress = await send(sock, chatId, `🔍 Searching Universe Database for *${query}*…`, originalMsg);
