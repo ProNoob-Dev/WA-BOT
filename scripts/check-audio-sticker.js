@@ -260,6 +260,13 @@ if (!fs.existsSync(danceClip)) {
         console.log(`circle render on test clip: ${circleWebp.length} bytes (500KB cap)`);
         assert.ok(circleWebp.length <= 480 * 1024, `circle sticker must fit WhatsApp's 500KB cap, got ${circleWebp.length}`);
 
+        // the mask must actually cut a circle — transparent corners, opaque centre
+        const { data: px, info: pxInfo } = await sharp(circleWebp).raw().toBuffer({ resolveWithObject: true });
+        assert.strictEqual(pxInfo.channels, 4, 'circle sticker must keep an alpha channel');
+        const alphaAt = (x, y) => px[(y * pxInfo.width + x) * pxInfo.channels + 3];
+        assert.strictEqual(alphaAt(0, 0), 0, 'circle corner must be transparent');
+        assert.strictEqual(alphaAt(256, 256), 255, 'circle centre must be opaque');
+
         await controller._extractAudioClip(danceClip, audioPath, 5);
         const ogg = fs.readFileSync(audioPath);
         assert.strictEqual(ogg.subarray(0, 4).toString('ascii'), 'OggS');

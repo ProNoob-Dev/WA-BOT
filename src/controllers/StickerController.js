@@ -20,6 +20,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BUNDLED_FONT_PATH = path.resolve(__dirname, '../../fonts/Roboto-Bold.ttf');
+const CIRCLE_MASK_PATH = path.resolve(__dirname, '../../assets/circle-mask-512.png');
 
 /** Lazy ffmpeg — avoid loading fluent-ffmpeg/ffmpeg-static at boot. */
 let _ffmpeg = null;
@@ -201,44 +202,48 @@ class StickerController {
         await writeFile(outputPath, out);
     }
 
-    async _renderCircleSticker(mediaPath, outputPath, { animated = false, inputBuffer = null } = {}) {
+    async _renderCircleSticker(mediaPath, outputPath, { animated = false, inputBuffer = null, seconds = null } = {}) {
         if (animated && /\.webp$/i.test(mediaPath)) {
             await this._renderCircleStickerSharp(inputBuffer || fs.readFileSync(mediaPath), outputPath);
             return;
         }
 
-        // Same 500KB cap as the crop path — the old fixed 9s/15fps render of
-        // a busy clip came out at ~1MB, so the image never showed. First
-        // attempt keeps 9s/15fps, step down only if the file is still too big.
-        const attempts = [
-            { fps: 15, seconds: 9 },
-            { fps: 10, seconds: 6 },
-            { fps: 8, seconds: 5 },
-        ];
-        for (const { fps, seconds } of attempts) {
-            const circleFilter = [
-                "crop=w='min(iw,ih)':h='min(iw,ih)'",
-                'scale=512:512',
-                'format=rgba',
-                "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lte(hypot(X-(W/2),Y-(H/2)),W/2-2),255,0)'",
-                `fps=${fps}`,
-            ].join(',');
+        // Static circle mask + alphamerge, not geq: the old per-pixel geq
+        // expression ran on every frame (9s/15fps = 135 frames, ~1MB, so it
+        // re-rendered twice) and a plain /astk rendered 9s of video for 5s
+        // of audio. The mask is ~3x faster per frame and, for audio
+        // stickers, the video is cut to the audio length so it fits first
+        // try. Same 500KB cap — step down only if still too big.
+        const attempts = seconds
+            ? [{ fps: 10, seconds }, { fps: 8, seconds }]
+            : [
+                { fps: 15, seconds: 9 },
+                { fps: 10, seconds: 6 },
+                { fps: 8, seconds: 5 },
+            ];
+        for (const { fps, seconds: secs } of attempts) {
+            const filter = [
+                `[0:v]crop=w='min(iw,ih)':h='min(iw,ih)',scale=512:512,format=rgba,fps=${fps}[main]`,
+                '[1:v]fps=10,format=rgba[mask]',
+                '[main][mask]alphamerge',
+            ].join(';');
 
             const ffmpeg = await getFfmpeg();
             const command = ffmpeg(mediaPath);
             if (/\.gif$/i.test(mediaPath)) {
                 command.inputOptions(['-ignore_loop', '0']);
             }
+            command.input(CIRCLE_MASK_PATH).inputOptions(['-loop', '1']);
 
             await this._enqueueFfmpeg(() => this._runFfmpeg(
                 command
                     .addOutputOptions([
                         '-vcodec', 'libwebp',
-                        '-vf', circleFilter,
+                        '-filter_complex', filter,
                         '-loop', '0',
                         '-ss', '00:00:00.0',
-                        '-t', `00:00:0${seconds}.0`,
-                        '-preset', 'default',
+                        '-t', String(secs),
+                        '-compression_level', '2',
                         '-an',
                         '-fps_mode', 'passthrough',
                         '-threads', '0',
@@ -273,7 +278,7 @@ class StickerController {
                         '-loop', '0',
                         '-ss', '00:00:00.0',
                         '-t', `00:00:0${seconds}.0`,
-                        '-preset', 'default',
+                        '-compression_level', '2',
                         '-an',
                         '-vsync', '0',
                         '-s', '512:512',
@@ -529,7 +534,7 @@ class StickerController {
                 const audioPath = this._generateTempFileName('.ogg');
                 try {
                     if (shape === 'circle') {
-                        await this._renderCircleSticker(mediaPath, stickerPath, { animated: true });
+                        await this._renderCircleSticker(mediaPath, stickerPath, { animated: true, seconds });
                     } else {
                         await this._renderStandardSticker(mediaPath, stickerPath, 'crop');
                     }
