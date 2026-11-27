@@ -141,7 +141,7 @@ export function createDownloadContext(sock) {
  * @param {import('baileys').proto.IWebMessageInfo} waMessage
  * @returns {Promise<Buffer>}
  */
-async function tryDownloadMediaMessage(sock, waMessage) {
+export async function tryDownloadMediaMessage(sock, waMessage) {
     const buffer = await withTimeout(
         downloadMediaMessage(waMessage, 'buffer', {}, downloadContext(sock)),
         DOWNLOAD_TIMEOUT_MS,

@@ -5,7 +5,7 @@
 
 import { downloadMediaMessage, downloadContentFromMessage, normalizeMessageContent } from 'baileys';
 import { getTextFromWAMessage, buildQuotedTargetMessage } from '../utils/waMessage.js';
-import { downloadStickerBuffer, createDownloadContext, isValidWebpBuffer } from '../utils/stickerDownload.js';
+import { downloadStickerBuffer, createDownloadContext, isValidWebpBuffer, tryDownloadMediaMessage } from '../utils/stickerDownload.js';
 import { sendAudioSticker } from '../utils/audioSticker.js';
 import { extractStickerFromMessage } from '../utils/stickerExtract.js';
 import fs from 'fs';
@@ -512,18 +512,22 @@ class StickerController {
 
             try {
                 const t0 = Date.now();
-                const activeSock = await this._activeSock(sock);
+                let activeSock = await this._activeSock(sock);
                 const tSock = Date.now();
-                const buffer = await downloadMediaMessage(
-                    targetMessage,
-                    'buffer',
-                    {},
-                    createDownloadContext(activeSock),
-                );
+                let buffer = null;
+                try {
+                    buffer = await tryDownloadMediaMessage(activeSock, targetMessage);
+                } catch (downloadErr) {
+                    // The socket can drop mid-download (WhatsApp closes it,
+                    // the bot reconnects) — the raw download hung ~109s on
+                    // that once. One retry on the fresh socket beats failing
+                    // a sticker the user already waited for.
+                    logger.warn(`Audio sticker download failed, retrying: ${downloadErr?.message || downloadErr}`);
+                    activeSock = await this._activeSock(sock);
+                    buffer = await tryDownloadMediaMessage(activeSock, targetMessage);
+                }
                 if (!buffer || buffer.length === 0) {
-                    await sock.sendMessage(chatId, {
-                        text: '❌ Failed to download video. Please try again.',
-                    });
+                    await this._sendAstkError(sock, chatId, '❌ Failed to download video. Please try again.');
                     return;
                 }
 
@@ -561,7 +565,12 @@ class StickerController {
                     }
 
                     const tBuilt = Date.now();
-                    await sendAudioSticker(activeSock, chatId, {
+                    // The socket can be replaced mid-render (drop + reconnect),
+                    // so send on the live one, not the one from the start —
+                    // sending on the stale socket is what failed with
+                    // "Connection Closed" last time.
+                    const sendSock = await this._activeSock(sock);
+                    await sendAudioSticker(sendSock, chatId, {
                         webpBuffer: stampedWebp,
                         audioBuffer,
                         seconds,
@@ -574,29 +583,33 @@ class StickerController {
                     );
                 } catch (err) {
                     logger.error('Audio sticker build/send error:', err);
-                    await sock.sendMessage(chatId, {
-                        text: err?.message === 'no audio track in video'
+                    await this._sendAstkError(sock, chatId,
+                        err?.message === 'no audio track in video'
                             ? '❌ That video has no sound — reply to a video with audio.'
-                            : '❌ Failed to create audio sticker.',
-                    });
+                            : '❌ Failed to create audio sticker.');
                 } finally {
                     this._safeUnlink(stickerPath);
                     this._safeUnlink(audioPath);
                 }
             } catch (error) {
                 logger.error('Audio sticker media error:', error);
-                await sock.sendMessage(chatId, {
-                    text: '❌ Failed to process video.',
-                });
+                await this._sendAstkError(sock, chatId, '❌ Failed to process video.');
             } finally {
                 this._safeUnlink(mediaPath);
             }
         } catch (error) {
             logger.error('Audio sticker handler error:', error);
-            await sock.sendMessage(chatId, {
-                text: '⚠️ Failed to create audio sticker.',
-            });
+            await this._sendAstkError(sock, chatId, '⚠️ Failed to create audio sticker.');
         }
+    }
+
+    /** Error reply that never throws and uses the live socket, so a dead
+     * socket can't turn one failure into a cascade of failed replies. */
+    async _sendAstkError(sock, chatId, text) {
+        try {
+            const liveSock = await this._activeSock(sock, 10000);
+            await liveSock.sendMessage(chatId, { text }).catch(() => {});
+        } catch {}
     }
 
     async _buildSticker(sock, chatId, mediaPath, packName, authorName, shape, noMetadata, quotedMsg, isAnimated = false) {
