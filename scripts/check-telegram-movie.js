@@ -253,21 +253,20 @@ assert.strictEqual(typeof COMMAND_HANDLERS.tglink, 'function');
 const sent = [];
 const sock = {
     async sendMessage(chatId, content) {
-        sent.push({ chatId, text: content.text });
+        sent.push({ chatId, text: content.text, edit: !!content.edit });
         return { key: { id: 'x' } };
     },
 };
 service.shortenUrl = async () => 'https://is.gd/abc123';
 await handleTgMovie(sock, 'chat1', 'owner@lid', ['Hanuman'], { telegramMovieService: service });
-const allSent = sent.map((s) => s.text).join('\n');
-assert.ok(allSent.includes('Hanu-Man.2024.720p.mkv'), 'reply must list the 720p file');
-assert.ok(allSent.includes('Hanu-Man.2024.1080p.mkv'), 'reply must list the 1080p file');
-assert.ok(allSent.includes('https://is.gd/abc123'), 'reply must include the shortened link');
-assert.ok(allSent.includes('Searching Universe Database for *Hanuman*'), 'first message must name Universe Database');
-const resultMsgs = sent.filter((s) => s.text.includes('Hanu-Man.2024.720p.mkv'));
-assert.strictEqual(resultMsgs.length, 1, 'all files must come in one combined message, not one per file');
-assert.ok(resultMsgs[0].text.includes('Hanu-Man.2024.1080p.mkv'), 'the one results message must list every file');
-assert.ok(/Sent all links/.test(sent.at(-1)?.text || ''), 'last message must say all links were sent');
+const fresh = sent.filter((s) => !s.edit);
+assert.strictEqual(fresh.length, 1, 'only one fresh message — everything else must be an edit of it');
+assert.ok(fresh[0].text.includes('Searching Universe Database for *Hanuman*'), 'first message must name Universe Database');
+const finalText = sent.at(-1)?.text || '';
+assert.ok(finalText.includes('Hanu-Man.2024.720p.mkv'), 'final message must list the 720p file');
+assert.ok(finalText.includes('Hanu-Man.2024.1080p.mkv'), 'final message must list the 1080p file');
+assert.ok(finalText.includes('https://is.gd/abc123'), 'final message must include the shortened link');
+assert.ok(/Sent all links/.test(finalText), 'final message must say all links were sent');
 
 const sent2 = [];
 const sock2 = {

@@ -78,8 +78,9 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
     }
     const progress = await send(sock, chatId, `🔍 Searching Universe Database for *${query}*…`, originalMsg);
     const progressKey = progress?.key || null;
-    const progressText = (total, linked) =>
-        `📂 Found ${total} file${total > 1 ? 's' : ''} in Universe Database\n🔗 Links sent: ${linked}/${total}`;
+    // One message for the whole run: links keep appending to it, no spam.
+    let messageText = `🔍 Searching Universe Database for *${query}*…`;
+    const refresh = () => progressKey && updateProgress(sock, chatId, progressKey, messageText);
     let result;
     let sentCount = 0;
     let withLinks = 0;
@@ -87,12 +88,15 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
         result = await service.searchWithLinks(query, async ({ file, links, bot }, _index, total) => {
             sentCount += 1;
             if (links.length) withLinks += 1;
-            if (progressKey) await updateProgress(sock, chatId, progressKey, progressText(total, withLinks));
+            messageText += `\n\n📁 *${file.fileName}*`;
+            if (links.length) {
+                const shortLinks = await Promise.all(links.map((u) => service.shortenUrl(u)));
+                messageText += `\n${shortLinks.map((u) => `🔗 ${u}`).join('\n')}`;
+            } else messageText += '\n_No link back yet — every link bot was busy or silent. Try again in a bit._';
+            await refresh();
         }, async (total) => {
-            if (progressKey) {
-                await updateProgress(sock, chatId, progressKey,
-                    `📂 Found ${total} file${total > 1 ? 's' : ''} in Universe Database — sending links…`);
-            }
+            messageText = `📂 Found ${total} file${total > 1 ? 's' : ''} in Universe Database — sending links…`;
+            await refresh();
         });
     } catch (err) {
         logger.warn(`tgmovie search failed for "${query}": ${err?.message || err}`);
@@ -110,20 +114,7 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
         else await send(sock, chatId, text, originalMsg);
         return;
     }
-    // One combined message for all files — per-file messages spam the chat.
-    const lines = [`🎬 *${query}* — ${result.files.length} file${result.files.length > 1 ? 's' : ''}:\n`];
-    for (const { file, links } of result.files) {
-        lines.push(`📁 *${file.fileName}*`);
-        if (links.length) {
-            const shortLinks = await Promise.all(links.map((u) => service.shortenUrl(u)));
-            lines.push(...shortLinks.map((u) => `🔗 ${u}`));
-        } else lines.push('_No link back yet — every link bot was busy or silent. Try again in a bit._');
-        lines.push('');
-    }
-    await send(sock, chatId, lines.join('\n').trim(), originalMsg);
-    if (withLinks === result.files.length) {
-        await send(sock, chatId, '✅ Sent all links.', originalMsg);
-    } else {
-        await send(sock, chatId, `⚠️ Sent ${withLinks} of ${result.files.length} links — the rest had no link yet. Try again in a bit.`, originalMsg);
-    }
+    if (withLinks === result.files.length) messageText += '\n\n✅ Sent all links.';
+    else messageText += `\n\n⚠️ Sent ${withLinks} of ${result.files.length} links — the rest had no link yet. Try again in a bit.`;
+    await refresh();
 }
