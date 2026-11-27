@@ -653,7 +653,9 @@ export async function safeSendMessage(sock, chatId, content, waMessage = null, e
             const dmJid = key?.remoteJid || conversationJid;
             const sendOpts = waMessage ? { quoted: waMessage } : {};
             logger.info(`DM reply → ${dmJid} (conversation=${conversationJid})`);
-            const sent = await sock.sendMessage(dmJid, content, sendOpts);
+            // Same 20s timeout as group sends — a raw send with no timeout
+            // hung a whole movie search (and the bot) when the socket stalled.
+            const sent = await sendWithTimeout(sock, dmJid, content, sendOpts, sendTimeoutMs);
             if (sent) {
                 logger.info(`Reply sent to ${dmJid}${sent.key?.id ? ` (id=${sent.key.id})` : ''}`);
                 return sent;
