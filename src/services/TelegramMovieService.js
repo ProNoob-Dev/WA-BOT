@@ -380,7 +380,7 @@ export class TelegramMovieService {
     }
 
     /** Wait for one bot's reply links after a forward. */
-    async _waitForLinks(bot, botName, before) {
+    async _waitForLinks(bot, botName, before, afterId = 0) {
         const deadline = Date.now() + PER_BOT_WAIT_MS;
         while (Date.now() < deadline) {
             await sleep(LINK_POLL_MS);
@@ -395,7 +395,13 @@ export class TelegramMovieService {
                 recent = [];
             }
             for (const message of recent) {
-                if ((message?.date || 0) <= before) continue;
+                // A reply to this forward has a higher message id than the
+                // forward itself. Ids are clock-free, so a reply that lands
+                // in the same second as the forward can't be missed the way
+                // the reply date can. Fall back to the date when the
+                // forward gave no id.
+                const isNew = afterId ? (message?.id || 0) > afterId : (message?.date || 0) > before;
+                if (!isNew) continue;
                 const text = String(message?.message || '');
                 if (isLimitReply(text)) {
                     logger.info(`tgmovie: @${botName} answered with a limit message`);
@@ -427,13 +433,13 @@ export class TelegramMovieService {
             try {
                 const bot = await withTimeout(client.getEntity(botName), 15_000, `resolve @${botName}`);
                 const before = Math.floor(Date.now() / 1000);
-                await withTimeout(
+                const forwarded = await withTimeout(
                     client.forwardMessages(bot, { messages: [file.messageId], fromPeer: channel }),
                     15_000,
                     `forward to @${botName}`,
                 );
                 logger.info(`tgmovie: forwarded ${file.fileName} to @${botName}, waiting for links`);
-                const { links, limited } = await this._waitForLinks(bot, botName, before);
+                const { links, limited } = await this._waitForLinks(bot, botName, before, forwarded?.[0]?.id || 0);
                 if (links.length) return { links, bot: botName };
                 if (limited) {
                     this._markLimited(botName);

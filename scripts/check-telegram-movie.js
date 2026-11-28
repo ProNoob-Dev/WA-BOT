@@ -75,7 +75,7 @@ function fakeClient({ searchMessages = [], botReplies = {} } = {}) {
         async forwardMessages(entity, { messages, fromPeer }) {
             forwardCount += 1;
             calls.forwards.push({ entity, messages, fromPeer });
-            return [{ id: 999 }];
+            return [{ id: 10 }];
         },
         async invoke(req) {
             if (req?.className === 'auth.SendCode') {
@@ -190,6 +190,20 @@ const threeLinkService = new TelegramMovieService({ createClient: () => threeLin
 const threeLinkResult = await threeLinkService.searchWithLinks('Hanuman');
 assert.deepStrictEqual(threeLinkResult.files[0].links, ['https://cinebox.example.com/dl/first'],
     'only the first link per file is kept');
+
+// A reply older than the forward (a previous file's links) is ignored,
+// even when it is still among the latest messages.
+const staleClient = fakeClient({
+    searchMessages: searchMsgs,
+    botReplies: { cinebox_node1_2gv6_bot: () => [
+        { id: 5, date: 9999999999, message: 'Download https://stale.example.com/old' },
+        { id: 50, date: 9999999999, message: 'Download https://cinebox.example.com/dl/fresh' },
+    ] },
+});
+const staleService = new TelegramMovieService({ createClient: () => staleClient });
+const staleResult = await staleService.searchWithLinks('Hanuman');
+assert.deepStrictEqual(staleResult.files[0].links, ['https://cinebox.example.com/dl/fresh'],
+    'an older reply must not stand in for this forward');
 
 // Shortening: a working shortener returns the short link, a failing one
 // falls through to the next, and a dead shortener returns the original —
