@@ -482,13 +482,17 @@ export class TelegramMovieService {
         let titleQuery = wanted ? String(query).replace(QUALITY_RE, '').replace(/\s+/g, ' ').trim() : String(query);
         if (!titleQuery) titleQuery = String(query);
         const found = await client.getMessages(channel, { search: titleQuery, limit: 20 });
-        let files = pickOnePerQuality(mediaEntries(found));
+        let files = mediaEntries(found);
         let fellBack = false;
         if (wanted) {
             const matching = files.filter((f) => qualityOf(f.fileName) === wanted);
             if (matching.length) files = matching;
             else if (files.length) fellBack = true;
         }
+        // One file per quality only when no quality was asked for, or when
+        // falling back to what's available — a quality that was asked for
+        // returns every file of that quality.
+        if (!wanted || fellBack) files = pickOnePerQuality(files);
         logger.info(`tgmovie: search "${query}" found ${files.length} file(s) in the channel${fellBack ? ` (no ${wanted} — showing available)` : ''}`);
         if (files.length && onFound) await onFound(files.length, { fellBack, wantedQuality: wanted });
         const results = [];

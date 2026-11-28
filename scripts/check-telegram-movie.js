@@ -272,6 +272,24 @@ assert.strictEqual(only720.files.length, 1, '720p asked and present — only the
 assert.ok(only720.files[0].file.fileName.includes('720p'));
 assert.strictEqual(only720.fellBack, false);
 
+// A quality that was asked for returns every file of that quality —
+// four 720p uploads of the same movie are four results, not one.
+const four720Client = fakeClient({
+    searchMessages: [
+        msg(1, 301, 'Mad Max 1979 720p', 'Mad.Max.1979.720p.BluRay.mkv'),
+        msg(2, 302, 'Mad Max 1979 720p', 'Mad.Max.1979.720p.WEB-DL.mkv'),
+        msg(3, 303, 'Mad Max 1979 720p', 'Mad.Max.1979.720p.HDR.mkv'),
+        msg(4, 304, 'Mad Max 1979 720p', 'Mad.Max.1979.720p.10bit.mkv'),
+        msg(5, 305, 'Mad Max 1979 1080p', 'Mad.Max.1979.1080p.BluRay.mkv'),
+    ],
+    botReplies: { cinebox_node1_2gv6_bot: () => [linkReply('https://cinebox.example.com/dl/abc123')] },
+});
+const four720Service = new TelegramMovieService({ createClient: () => four720Client });
+const all720 = await four720Service.searchWithLinks('Mad Max 1979 720p', async () => {});
+assert.strictEqual(all720.files.length, 4, '720p asked and four 720p files exist — all four come back');
+assert.strictEqual(all720.fellBack, false);
+assert.strictEqual(four720Client.calls.forwards.length, 4, 'each 720p file must be forwarded once');
+
 // Wanted quality missing — the available quality comes back instead.
 const only1080Client = fakeClient({
     searchMessages: [msg(3, 222, 'Hanu-Man 2024 1080p', 'Hanu-Man.2024.1080p.mkv')],
