@@ -167,7 +167,7 @@ assert.deepStrictEqual(picked.map((f) => f.documentId), [201, 204, 205, 206, 207
 const searchMsgs = entries.map((e, i) => msg(i + 1, e.documentId, e.caption, e.fileName));
 const client = fakeClient({
     searchMessages: searchMsgs,
-    botReplies: { reaperfiletolinkbot: () => [linkReply('https://reaper.example.com/dl/abc123')] },
+    botReplies: { cinebox_node1_2gv6_bot: () => [linkReply('https://cinebox.example.com/dl/abc123')] },
 });
 const service = new TelegramMovieService({ createClient: () => client });
 
@@ -177,8 +177,8 @@ assert.strictEqual(found.length, 2, 'searchChannel must return the deduped files
 const result = await service.searchWithLinks('Hanuman');
 assert.strictEqual(result.files.length, 2, 'searchWithLinks must return one result per file');
 assert.strictEqual(client.calls.forwards.length, 2, 'each file must be forwarded once');
-assert.deepStrictEqual(result.files[0].links, ['https://reaper.example.com/dl/abc123']);
-assert.deepStrictEqual(result.files[1].links, ['https://reaper.example.com/dl/abc123']);
+assert.deepStrictEqual(result.files[0].links, ['https://cinebox.example.com/dl/abc123']);
+assert.deepStrictEqual(result.files[1].links, ['https://cinebox.example.com/dl/abc123']);
 
 // Shortening: a working shortener returns the short link, a failing one
 // falls through to the next, and a dead shortener returns the original —
@@ -208,8 +208,8 @@ globalThis.fetch = realFetch;
 const fallbackClient = fakeClient({
     searchMessages: searchMsgs,
     botReplies: {
-        reaperfiletolinkbot: (forwards) => (forwards <= 1
-            ? [linkReply('https://reaper.example.com/dl/abc123')]
+        cinebox_node1_2gv6_bot: (forwards) => (forwards <= 1
+            ? [linkReply('https://cinebox.example.com/dl/abc123')]
             : [limitReply]),
         PublicDirectFileToLinkBot: () => [linkReply('https://public.example.com/dl/xyz789')],
     },
@@ -220,12 +220,12 @@ const fallbackResult = await fallbackService.searchWithLinks('Hanuman', async (e
     streamed.push(entry);
 });
 assert.strictEqual(streamed.length, 2, 'onFile must fire once per file, as each finishes');
-assert.strictEqual(streamed[0].bot, 'reaperfiletolinkbot');
+assert.strictEqual(streamed[0].bot, 'cinebox_node1_2gv6_bot');
 assert.strictEqual(streamed[1].bot, 'PublicDirectFileToLinkBot', 'throttled bot must fall through to the next one');
 assert.deepStrictEqual(streamed[1].links, ['https://public.example.com/dl/xyz789']);
 assert.strictEqual(fallbackClient.calls.forwards.length, 3, 'file 1 -> bot 1, file 2 -> bot 1 (limited) -> bot 2');
 assert.ok(
-    (fallbackService._limitedUntil.get('reaperfiletolinkbot') || 0) > Date.now() + 100_000,
+    (fallbackService._limitedUntil.get('cinebox_node1_2gv6_bot') || 0) > Date.now() + 100_000,
     'a throttled bot must stay out for the 2-minute cooldown',
 );
 const allLinks = fallbackResult.files.flatMap((f) => f.links);
@@ -235,7 +235,7 @@ assert.strictEqual(new Set(allLinks).size, allLinks.length, 'no link may be sent
 // wanted quality is picked from what came back.
 const qualityClient = fakeClient({
     searchMessages: searchMsgs,
-    botReplies: { reaperfiletolinkbot: () => [linkReply('https://reaper.example.com/dl/abc123')] },
+    botReplies: { cinebox_node1_2gv6_bot: () => [linkReply('https://cinebox.example.com/dl/abc123')] },
 });
 const qualityService = new TelegramMovieService({ createClient: () => qualityClient });
 const only720 = await qualityService.searchWithLinks('Hanuman 720p', async () => {});
@@ -246,7 +246,7 @@ assert.strictEqual(only720.fellBack, false);
 // Wanted quality missing — the available quality comes back instead.
 const only1080Client = fakeClient({
     searchMessages: [msg(3, 222, 'Hanu-Man 2024 1080p', 'Hanu-Man.2024.1080p.mkv')],
-    botReplies: { reaperfiletolinkbot: () => [linkReply('https://reaper.example.com/dl/abc123')] },
+    botReplies: { cinebox_node1_2gv6_bot: () => [linkReply('https://cinebox.example.com/dl/abc123')] },
 });
 const only1080Service = new TelegramMovieService({ createClient: () => only1080Client });
 const fellBack = await only1080Service.searchWithLinks('Hanuman 720p', async () => {});

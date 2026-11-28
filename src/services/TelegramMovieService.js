@@ -1,7 +1,7 @@
 /**
  * Telegram movie search — WA-BOT talks to Telegram as the owner's user
  * account (gramJS / MTProto) so a WhatsApp `/tgmovie <name>` can search the
- * owner's movie channel, forward the matching files to @reaperfiletolinkbot,
+ * owner's movie channel, forward the matching files to @cinebox_node1_2gv6_bot,
  * and send the link bot's reply links back to WhatsApp.
  *
  * Why a user client, not a bot token: a Bot API bot cannot search a private
@@ -181,11 +181,11 @@ export class TelegramMovieService {
     }
 
     get linkBots() {
-        const list = String(config.TG_LINK_BOTS || config.TG_LINK_BOT || 'reaperfiletolinkbot')
+        const list = String(config.TG_LINK_BOTS || config.TG_LINK_BOT || 'cinebox_node1_2gv6_bot')
             .split(',')
             .map((b) => b.trim())
             .filter(Boolean);
-        return list.length ? list : ['reaperfiletolinkbot'];
+        return list.length ? list : ['cinebox_node1_2gv6_bot'];
     }
 
     isLoggedIn() {
