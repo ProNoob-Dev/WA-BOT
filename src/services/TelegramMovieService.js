@@ -397,11 +397,11 @@ export class TelegramMovieService {
             }
             for (const message of recent) {
                 if (!newest || (message?.id || 0) > (newest?.id || 0)) newest = message;
-                // A reply to this forward has a higher message id than the
-                // forward itself. Ids are clock-free, so a reply that lands
-                // in the same second as the forward can't be missed the way
-                // the reply date can. Fall back to the date when the
-                // forward gave no id.
+                // A reply to this forward is newer than the newest message
+                // already in the chat. Ids are clock-free, so a reply that
+                // lands in the same second as the forward can't be missed
+                // the way the reply date can. Fall back to the date when
+                // the baseline read gave no id.
                 const isNew = afterId ? (message?.id || 0) > afterId : (message?.date || 0) > before;
                 if (!isNew) continue;
                 const text = String(message?.message || '');
@@ -419,7 +419,7 @@ export class TelegramMovieService {
                 logger.info(`tgmovie: @${botName} replied (${message?.id}) with no links yet — ${text.slice(0, 120)}`);
             }
         }
-        logger.warn(`tgmovie: no links from @${botName} after ${PER_BOT_WAIT_MS / 1000}s — newest in chat id=${newest?.id} date=${newest?.date}, forward id=${afterId}`);
+        logger.warn(`tgmovie: no links from @${botName} after ${PER_BOT_WAIT_MS / 1000}s — newest in chat id=${newest?.id} date=${newest?.date}, after id=${afterId}`);
         return { links: [], limited: false };
     }
 
@@ -436,13 +436,23 @@ export class TelegramMovieService {
             try {
                 const bot = await withTimeout(client.getEntity(botName), 15_000, `resolve @${botName}`);
                 const before = Math.floor(Date.now() / 1000);
-                const forwarded = await withTimeout(
+                // The newest message already in the bot chat. A reply to
+                // this forward has a higher id. (forwardMessages gives no
+                // usable id back, so read the baseline first instead.)
+                let lastId = 0;
+                try {
+                    const latest = await withTimeout(client.getMessages(bot, { limit: 1 }), 10_000, 'link bot last message read');
+                    lastId = Math.max(0, ...(latest || []).map((m) => m?.id || 0));
+                } catch {
+                    lastId = 0;
+                }
+                await withTimeout(
                     client.forwardMessages(bot, { messages: [file.messageId], fromPeer: channel }),
                     15_000,
                     `forward to @${botName}`,
                 );
-                logger.info(`tgmovie: forwarded ${file.fileName} to @${botName} (msg ${forwarded?.[0]?.id || 0}), waiting for links`);
-                const { links, limited } = await this._waitForLinks(bot, botName, before, forwarded?.[0]?.id || 0);
+                logger.info(`tgmovie: forwarded ${file.fileName} to @${botName} (after ${lastId}), waiting for links`);
+                const { links, limited } = await this._waitForLinks(bot, botName, before, lastId);
                 if (links.length) return { links, bot: botName };
                 if (limited) {
                     this._markLimited(botName);

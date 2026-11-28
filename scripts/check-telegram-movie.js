@@ -68,9 +68,13 @@ function fakeClient({ searchMessages = [], botReplies = {} } = {}) {
         async getDialogs() {
             return [];
         },
-        async getMessages(entity) {
+        async getMessages(entity, { limit } = {}) {
             const fn = botReplies[entity?.__entity];
-            return fn ? fn(forwardCount) : searchMessages;
+            if (!fn) return searchMessages;
+            // The pre-forward baseline read (limit 1) sees only the old
+            // message already in the chat; the poll reads the bot's replies.
+            if (limit === 1) return [{ id: 10, date: 1, message: 'old message' }];
+            return fn(forwardCount);
         },
         async forwardMessages(entity, { messages, fromPeer }) {
             forwardCount += 1;
