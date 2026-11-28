@@ -13,8 +13,9 @@
  *
  * Dedup: the same file reposted in the channel forwards once (matched by
  * Telegram document id). Different qualities are different files, so all of
- * them are forwarded and all of their links come back. Series episodes are
- * separate files and each gets its own links.
+ * them are forwarded, but only the first link of each comes back — the
+ * bot's extra links are mirrors, and the user wants just the download link.
+ * Series episodes are separate files and each gets its own links.
  *
  * Link bots: the first bot answers most files, but it throttles (about 2
  * links a minute). When a bot answers with a limit message or stays silent,
@@ -400,7 +401,9 @@ export class TelegramMovieService {
                     logger.info(`tgmovie: @${botName} answered with a limit message`);
                     return { links: [], limited: true };
                 }
-                const links = extractUrlsFromMessage(message);
+                // Only the first link per file — the bot's extra links are
+                // mirrors/watch links, and the user wants just the download link.
+                const links = extractUrlsFromMessage(message).slice(0, 1);
                 if (links.length) {
                     logger.info(`tgmovie: @${botName} replied (${message?.id}): ${links.length} link(s)`);
                     return { links, limited: false };

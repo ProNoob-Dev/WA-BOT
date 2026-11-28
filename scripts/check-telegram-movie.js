@@ -180,6 +180,17 @@ assert.strictEqual(client.calls.forwards.length, 2, 'each file must be forwarded
 assert.deepStrictEqual(result.files[0].links, ['https://cinebox.example.com/dl/abc123']);
 assert.deepStrictEqual(result.files[1].links, ['https://cinebox.example.com/dl/abc123']);
 
+// Only the first link per file — a bot that answers with three links
+// (download + watch + mirror) sends just the download link on.
+const threeLinkClient = fakeClient({
+    searchMessages: searchMsgs,
+    botReplies: { cinebox_node1_2gv6_bot: () => [{ id: 50, date: 9999999999, message: 'Download https://cinebox.example.com/dl/first Watch https://cinebox.example.com/watch/second Mirror https://cinebox.example.com/dl/third' }] },
+});
+const threeLinkService = new TelegramMovieService({ createClient: () => threeLinkClient });
+const threeLinkResult = await threeLinkService.searchWithLinks('Hanuman');
+assert.deepStrictEqual(threeLinkResult.files[0].links, ['https://cinebox.example.com/dl/first'],
+    'only the first link per file is kept');
+
 // Shortening: a working shortener returns the short link, a failing one
 // falls through to the next, and a dead shortener returns the original —
 // a link is never lost to the shortener.
