@@ -95,6 +95,11 @@ export function qualityOf(fileName) {
     return m ? m[1].toLowerCase().replace('4k', '2160p') : null;
 }
 
+/** A file's quality — its name first, its caption when the name has none. */
+function fileQuality(file) {
+    return qualityOf(file.fileName) || qualityOf(file.caption);
+}
+
 function episodeOf(fileName) {
     const m = String(fileName || '').match(/\bS\d{1,2}E\d{1,2}\b|\bE\d{1,2}\b|\bEpisode\s*\d+\b|\bPart\s*\d+\b/i);
     return m ? m[0].toLowerCase() : '';
@@ -108,7 +113,7 @@ function episodeOf(fileName) {
 export function pickOnePerQuality(files) {
     const seen = new Set();
     return files.filter((file) => {
-        const quality = qualityOf(file.fileName);
+        const quality = fileQuality(file);
         if (!quality) return true;
         const key = `${quality}|${episodeOf(file.fileName)}`;
         if (seen.has(key)) return false;
@@ -482,10 +487,12 @@ export class TelegramMovieService {
         let titleQuery = wanted ? String(query).replace(QUALITY_RE, '').replace(/\s+/g, ' ').trim() : String(query);
         if (!titleQuery) titleQuery = String(query);
         const found = await client.getMessages(channel, { search: titleQuery, limit: 20 });
-        let files = mediaEntries(found);
+        const entries = mediaEntries(found);
+        logger.info(`tgmovie: search "${titleQuery}" returned ${found.length} message(s), ${entries.length} file(s)`);
+        let files = entries;
         let fellBack = false;
         if (wanted) {
-            const matching = files.filter((f) => qualityOf(f.fileName) === wanted);
+            const matching = files.filter((f) => fileQuality(f) === wanted);
             if (matching.length) files = matching;
             else if (files.length) fellBack = true;
         }

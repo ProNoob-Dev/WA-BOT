@@ -290,6 +290,19 @@ assert.strictEqual(all720.files.length, 4, '720p asked and four 720p files exist
 assert.strictEqual(all720.fellBack, false);
 assert.strictEqual(four720Client.calls.forwards.length, 4, 'each 720p file must be forwarded once');
 
+// A file whose name has no quality still matches when its caption does.
+const captionQualityClient = fakeClient({
+    searchMessages: [
+        msg(1, 401, 'The Lord of the Rings The Rings of Power S01 COMBiNED\n480p | Hindi', 'The Lord of the Rings The Rings of Power S01 COMBiNED.mkv'),
+        msg(2, 402, 'The Lord of the Rings The Rings of Power S01 COMBiNED\n480p | Hindi', '480p.mkv'),
+    ],
+    botReplies: { cinebox_node1_2gv6_bot: () => [linkReply('https://cinebox.example.com/dl/abc123')] },
+});
+const captionQualityService = new TelegramMovieService({ createClient: () => captionQualityClient });
+const caption480 = await captionQualityService.searchWithLinks('Lord of the Rings Rings of Power S01 480p', async () => {});
+assert.strictEqual(caption480.files.length, 2, 'a file with no quality in its name must still match via its caption');
+assert.strictEqual(caption480.fellBack, false);
+
 // Wanted quality missing — the available quality comes back instead.
 const only1080Client = fakeClient({
     searchMessages: [msg(3, 222, 'Hanu-Man 2024 1080p', 'Hanu-Man.2024.1080p.mkv')],
