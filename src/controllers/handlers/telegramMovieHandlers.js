@@ -5,7 +5,7 @@
  */
 import { logger } from '../../utils/logger.js';
 import { config } from '../../config/config.js';
-import { QUALITY_RE } from '../../services/TelegramMovieService.js';
+import { QUALITY_RE, audioOf, formatSize } from '../../services/TelegramMovieService.js';
 import { safeSendMessage, editMessageText } from '../../utils/waMessage.js';
 
 const OWNER_PHONE = String(config.TG_LOGIN_PHONE || '+918830285258').trim();
@@ -94,6 +94,10 @@ export async function handleTgMovie(sock, chatId, senderJid, args, ctx, original
             sentCount += 1;
             if (links.length) withLinks += 1;
             messageText += `\n\n📁 *${file.fileName}*`;
+            const audio = audioOf([file.fileName, file.caption].filter(Boolean).join(' '));
+            if (audio) messageText += `\n🎧 ${audio}`;
+            const size = formatSize(file.size);
+            if (size) messageText += `\n💾 ${size}`;
             if (links.length) {
                 const shortLinks = await Promise.all(links.map((u) => service.shortenUrl(u)));
                 messageText += `\n${shortLinks.map((u) => `🔗 ${u}`).join('\n')}`;

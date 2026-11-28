@@ -29,6 +29,8 @@ const {
     isLimitReply,
     mediaEntries,
     pickOnePerQuality,
+    audioOf,
+    formatSize,
 } = await import('../src/services/TelegramMovieService.js');
 const { findCommand } = await import('../src/commands/registry.js');
 const { COMMAND_HANDLERS } = await import('../src/controllers/CommandController.js');
@@ -138,14 +140,29 @@ const entries = mediaEntries([
     msg(2, 111, 'Hanu-Man 2024 720p (repost)', 'Hanu-Man.2024.720p.mkv'),
     msg(3, 222, 'Hanu-Man 2024 1080p', 'Hanu-Man.2024.1080p.mkv'),
     { id: 4, message: 'just a text post', date: 1764000000, media: null },
-]);
-assert.strictEqual(entries.length, 2, 'same document id twice must dedupe to one entry');
+]);assert.strictEqual(entries.length, 2, 'same document id twice must dedupe to one entry');
 assert.deepStrictEqual(
     entries.map((e) => e.documentId),
     ['111', '222'],
     'different qualities are different files and both stay',
 );
 assert.strictEqual(entries[0].fileName, 'Hanu-Man.2024.720p.mkv');
+
+// Audio details come from the name — languages and codec.
+assert.strictEqual(audioOf('Special.Monster.2025.1080p.Hindi.DDP2.0-Chinese.DDP2.0.mkv'), 'Hindi + Chinese • DDP 2.0');
+assert.strictEqual(audioOf('Mad Max 1979 Hin Eng Esub 720p BluRay.mkv'), 'Hindi + English');
+assert.strictEqual(audioOf('Death Hunt 2022 720p Dual Audio Hindi English.mkv'), 'Hindi + English');
+assert.strictEqual(audioOf('Some.Movie.2024.1080p.AAC.mkv'), 'AAC');
+assert.strictEqual(audioOf('Movie Dual Audio.mkv'), 'Dual Audio');
+assert.strictEqual(audioOf('Plain.Movie.2024.1080p.mkv'), null, 'no audio info must yield nothing');
+
+// Sizes print readable.
+assert.strictEqual(formatSize(12345), '12.1 KB');
+assert.strictEqual(formatSize(2901000000), '2.7 GB');
+assert.strictEqual(formatSize(1720350000), '1.6 GB');
+assert.strictEqual(formatSize(500), '500 B');
+assert.strictEqual(formatSize(null), null);
+assert.strictEqual(formatSize(0), null);
 
 // 2. Service with a fake client --------------------------------------------
 // Limit detection: a throttling reply counts, a plain "please wait" does not.
@@ -349,7 +366,27 @@ assert.ok(fresh[0].text.includes('Searching Universe Database for *Hanuman 720p*
 const finalText = sent.at(-1)?.text || '';
 assert.ok(finalText.includes('Hanu-Man.2024.720p.mkv'), 'final message must list the 720p file');
 assert.ok(finalText.includes('https://is.gd/abc123'), 'final message must include the shortened link');
+assert.ok(finalText.includes('💾 12.1 KB'), 'final message must show the file size');
 assert.ok(/Sent all links/.test(finalText), 'final message must say all links were sent');
+
+// Each result shows its audio and size.
+const audioClient = fakeClient({
+    searchMessages: [msg(1, 501, 'Mad Max 1979 Hin Eng Esub 720p', 'Mad.Max.1979.Hin.Eng.Esub.720p.BluRay.mkv')],
+    botReplies: { cinebox_node1_2gv6_bot: () => [linkReply('https://cinebox.example.com/dl/abc123')] },
+});
+const audioService = new TelegramMovieService({ createClient: () => audioClient });
+audioService.shortenUrl = async () => 'https://is.gd/abc123';
+const sent5 = [];
+const sock5 = {
+    async sendMessage(chatId, content) {
+        sent5.push({ chatId, text: content.text, edit: !!content.edit });
+        return { key: { id: 'x' } };
+    },
+};
+await handleTgMovie(sock5, 'chat1', 'owner@lid', ['Mad', 'Max', '1979', '720p'], { telegramMovieService: audioService });
+const audioText = sent5.at(-1)?.text || '';
+assert.ok(audioText.includes('🎧 Hindi + English'), 'result must show the audio languages');
+assert.ok(audioText.includes('💾 12.1 KB'), 'result must show the file size');
 
 const sent2 = [];
 const sock2 = {

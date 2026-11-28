@@ -100,6 +100,49 @@ function fileQuality(file) {
     return qualityOf(file.fileName) || qualityOf(file.caption);
 }
 
+const AUDIO_LANGS = {
+    hindi: 'Hindi', hin: 'Hindi',
+    english: 'English', eng: 'English',
+    tamil: 'Tamil', telugu: 'Telugu', malayalam: 'Malayalam', kannada: 'Kannada',
+    punjabi: 'Punjabi', bengali: 'Bengali', marathi: 'Marathi', gujarati: 'Gujarati',
+    urdu: 'Urdu', chinese: 'Chinese', korean: 'Korean', japanese: 'Japanese',
+    spanish: 'Spanish', french: 'French', german: 'German', italian: 'Italian',
+    portuguese: 'Portuguese', russian: 'Russian', russ: 'Russian', arabic: 'Arabic',
+    thai: 'Thai', vietnamese: 'Vietnamese', indonesian: 'Indonesian',
+    turkish: 'Turkish', polish: 'Polish', dutch: 'Dutch',
+};
+
+/** Audio details from a file name or caption — languages and codec, e.g. "Hindi + English • DDP 2.0". Null when nothing is there. */
+export function audioOf(text) {
+    const raw = String(text || '');
+    const langs = [];
+    for (const token of raw.split(/[^A-Za-z]+/)) {
+        const lang = AUDIO_LANGS[token.toLowerCase()];
+        if (lang && !langs.includes(lang)) langs.push(lang);
+    }
+    const codec = raw.match(/\b(DDP|DD|DTS-HD|DTS|TRUEHD|E-?AC3|AAC|AC3|ATMOS|FLAC|OPUS)\s*(\d+(?:\.\d+)?)?/i);
+    const codecStr = codec ? `${codec[1].toUpperCase()}${codec[2] ? ` ${codec[2]}` : ''}` : '';
+    const dual = /dual\s*audio/i.test(raw) ? 'Dual Audio' : /multi\s*audio/i.test(raw) ? 'Multi Audio' : '';
+    if (!langs.length && !codecStr && !dual) return null;
+    const parts = [];
+    if (langs.length) parts.push(langs.join(' + '));
+    else if (dual) parts.push(dual);
+    if (codecStr) parts.push(codecStr);
+    return parts.join(' • ');
+}
+
+/** Bytes to a readable size — "2.7 GB", "12.1 KB". Null when unknown. */
+export function formatSize(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0;
+    let v = n;
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+    const text = v >= 100 || i === 0 ? String(Math.round(v)) : v.toFixed(1);
+    return `${text} ${units[i]}`;
+}
+
 function episodeOf(fileName) {
     const m = String(fileName || '').match(/\bS\d{1,2}E\d{1,2}\b|\bE\d{1,2}\b|\bEpisode\s*\d+\b|\bPart\s*\d+\b/i);
     return m ? m[0].toLowerCase() : '';
@@ -156,7 +199,7 @@ export function mediaEntries(messages) {
             documentId,
             caption: captionOf(message),
             fileName: fileNameOf(message),
-            size: message?.media?.document?.size ?? null,
+            size: message?.media?.document?.size ?? message?.media?.video?.size ?? null,
             date: message?.date ?? null,
         });
     }
