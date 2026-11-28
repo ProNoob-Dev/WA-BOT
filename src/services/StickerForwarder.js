@@ -384,37 +384,23 @@ class StickerForwarder {
             }
         }
 
-        if (!audioBuffer) {
-            try {
-                const { Sticker } = await import('wa-sticker-formatter');
-                const sticker = new Sticker(buffer, {
-                    pack: this.packName,
-                    author: this.packAuthor,
-                    type: 'default',
-                    quality: 50,
-                });
-                const repacked = await sticker.toBuffer();
-                if (isValidWebpBuffer(repacked)) {
-                    stickerBuffer = repacked;
-                } else {
-                    logger.warn('Sticker re-pack produced invalid WebP, sending original');
-                }
-            } catch (formatError) {
-                logger.warn(`Sticker re-pack failed, sending original: ${formatError.message}`);
+        // Stamp our pack/author with an EXIF injection instead of a full
+        // re-pack — re-encoding an animated sticker takes minutes on this
+        // instance and backs the forward queue up. The original WebP is
+        // already a valid WhatsApp sticker, so it forwards as-is (the
+        // audio sidecar, when there is one, is sent separately and
+        // survives the stamp).
+        try {
+            const WSF = (await import('wa-sticker-formatter')).default;
+            const exif = new WSF.Exif({ pack: this.packName, author: this.packAuthor });
+            const stamped = await exif.add(buffer);
+            if (isValidWebpBuffer(stamped)) {
+                stickerBuffer = stamped;
+            } else {
+                logger.warn('Sticker metadata stamp produced invalid WebP, sending original');
             }
-        } else {
-            // Sound sticker: stamp our metadata with an EXIF injection
-            // instead of a re-pack, so the audio sidecar survives.
-            try {
-                const WSF = (await import('wa-sticker-formatter')).default;
-                const exif = new WSF.Exif({ pack: this.packName, author: this.packAuthor });
-                const stamped = await exif.add(buffer);
-                if (isValidWebpBuffer(stamped)) {
-                    stickerBuffer = stamped;
-                }
-            } catch (metaErr) {
-                logger.warn(`Sound sticker metadata stamp failed, forwarding original: ${metaErr?.message || metaErr}`);
-            }
+        } catch (metaErr) {
+            logger.warn(`Sticker metadata stamp failed, forwarding original: ${metaErr?.message || metaErr}`);
         }
 
         const results = await Promise.allSettled(
